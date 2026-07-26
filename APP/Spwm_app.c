@@ -208,10 +208,10 @@ volatile uint8_t wave_enable_tim8 = 0;   // 0=未发波（上电默认），1=已发波
 // ==== 三相开环 SVPWM（第一轮） ====
 /* DQ voltage-loop constants. All voltage values are in volts. */
 #define DQ_CONTROL_TS_S               0.00005f
-#define DQ_SQRT_TWO_THIRDS            0.816496581f
-#define DQ_INV_SQRT_THREE             0.577350269f
+#define DQ_SQRT_TWO_THIRDS            0.816496581f//sqrt（2/3）
+#define DQ_INV_SQRT_THREE             0.577350269f//sqrt（1/3）
 #define DQ_VDC_NOMINAL_V              60.0f
-#define DQ_VECTOR_LIMIT_V             31.1769145f
+#define DQ_VECTOR_LIMIT_V             31.1769145f//最大 DQ 电压矢量幅值
 #define DQ_PI_CORRECTION_LIMIT_V      3.0f
 #define DQ_VOLTAGE_KP_MAX             2.0f
 #define DQ_VOLTAGE_KI_MAX             500.0f
@@ -256,33 +256,44 @@ static void DqVoltagePi_Reset(void)
 }
 
 /*
- * Return a bounded inverter-voltage correction.
- * Conditional integration prevents windup and still permits unwinding.
+ * 返回限幅约束后的逆变器电压校正量
+ * 采用条件积分策略，抑制积分饱和，同时可实现积分退饱和
  */
+// DQ轴电压PI控制器迭代更新函数
 static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
 {
+    // 读取PI比例、积分系数
     float kp = dq_voltage_kp;
     float ki = dq_voltage_ki;
+    // 计算预积分项：历史积分值 + 积分系数×控制周期×偏差
     float integral_candidate = pi->integral + ki * DQ_CONTROL_TS_S * error;
+    // PI控制器原始输出 = 比例项 + 预积分项
     float output = kp * error + integral_candidate;
 
+    // 正向输出超过电压校正上限限幅
     if (output > DQ_PI_CORRECTION_LIMIT_V)
     {
+        // 仅当偏差为负（输出有回落趋势）时，才更新积分值（条件积分防饱和）
         if (error < 0.0f)
         {
             pi->integral = integral_candidate;
         }
+        // 输出钳位至上限
         return DQ_PI_CORRECTION_LIMIT_V;
     }
+    // 负向输出低于电压校正下限限幅
     if (output < -DQ_PI_CORRECTION_LIMIT_V)
     {
+        // 仅当偏差为正（输出有回升趋势）时，更新积分值
         if (error > 0.0f)
         {
             pi->integral = integral_candidate;
         }
+        // 输出钳位至下限
         return -DQ_PI_CORRECTION_LIMIT_V;
     }
 
+    // 输出未触及限幅区间，正常更新积分并输出完整PI结果
     pi->integral = integral_candidate;
     return output;
 }
@@ -571,32 +582,39 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			}
 		}
 
-		/* Clarke and Park use U_uv = U_u - U_v and U_vw = U_v - U_w. */
+		/* Clarke变换、Park变换采用线电压定义：U_uv = U_u - U_v，U_vw = U_v - U_w */
 		float v_alpha_feedback = U_u;
 		float v_beta_feedback = (U_v - U_w) * DQ_INV_SQRT_THREE;
+		// Park变换，αβ→dq，得到d轴电压反馈
 		dq_vd_feedback = v_alpha_feedback * cos_theta
-		                 + v_beta_feedback * sin_theta;
+					+ v_beta_feedback * sin_theta;
+		// q轴电压反馈
 		dq_vq_feedback = -v_alpha_feedback * sin_theta
-		                 + v_beta_feedback * cos_theta;
+					+ v_beta_feedback * cos_theta;
 
-		/* vref is line-to-line RMS voltage; vd_ref is phase peak voltage. */
+		/* 母线给定vref为线电压有效值；vd_ref为相电压峰值给定 */
 		dq_vd_reference = dq_line_voltage_ref_rms
-		                  * DQ_SQRT_TWO_THIRDS
-		                  * soft_start_ratio;
+						* DQ_SQRT_TWO_THIRDS
+						* soft_start_ratio;
 
-		/* Add bounded PI corrections to the feedforward voltage reference. */
+		/* 将限幅PI校正量叠加至前馈电压给定值 */
+		// d轴电压PI调节器，输入误差=给定d轴电压 - 反馈d轴电压
 		float ud_correction = DqVoltagePi_Update(
 			&dq_vd_pi, dq_vd_reference - dq_vd_feedback);
+		// q轴电压PI调节器，无q轴电压给定，误差取负的q轴反馈
 		float uq_correction = DqVoltagePi_Update(
 			&dq_vq_pi, -dq_vq_feedback);
 
+		// d轴指令电压 = 前馈给定 + PI校正输出
 		dq_ud_command = dq_vd_reference + ud_correction;
+		// q轴指令电压仅使用PI校正输出，无直流前馈项
 		dq_uq_command = uq_correction;
 
-		/* Keep the vector inside the 5%-95% SVPWM duty range. */
+		/* 限制电压矢量幅值，使调制矢量落在SVPWM 5%~95%占空比线性区间内 */
 		float vector_magnitude_sq = dq_ud_command * dq_ud_command
-		                            + dq_uq_command * dq_uq_command;
+								+ dq_uq_command * dq_uq_command;
 		float vector_limit_sq = DQ_VECTOR_LIMIT_V * DQ_VECTOR_LIMIT_V;
+		// 矢量幅值超出最大限制时做归一化缩放
 		if (vector_magnitude_sq > vector_limit_sq)
 		{
 			float vector_scale = DQ_VECTOR_LIMIT_V / sqrtf(vector_magnitude_sq);
