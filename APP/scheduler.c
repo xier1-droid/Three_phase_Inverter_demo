@@ -42,8 +42,13 @@ void scheduler_run(void) // 运行任务调度器主循环 参数:无 返回:无
 extern PID_T PID_Voltage;
 extern PR_T PR_Current; 
 extern uint16_t count; 
+//反馈Park变换
+extern volatile float dq_voltage_kp;
+extern volatile float dq_voltage_ki;
+
 void led_task(void)
 {
+//	printf("%.2f,%.2f",dq_voltage_kp,dq_voltage_ki);
 //	my_printf(&huart1,"count:%d",count);
 //	printf("run\r\n");
 	HAL_GPIO_TogglePin(GPIOC,GPIO_PIN_9);

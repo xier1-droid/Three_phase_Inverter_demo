@@ -79,6 +79,8 @@ extern LowPassFilter_t Current_Offset_Filter_2;
 float P_v=3.8f,I_v=0.01f,target_v=24.0f;//1.65 0.028
 float P_c=0.08f,I_c=0.03f,target_c=0.5f * sqrt_2;		//电流幅值
 float PR_p_c=0.03f,PR_r_c=6.0f;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -221,13 +223,14 @@ int main(void)
 		
 //		printf("{Current_Get_2}:%.2f\r\n	",Current_Get_2);
 //		printf("{ADC_c_val_2}:%.2f\r\n",ADC_c_val_2);
-		printf("{Current_val_2}:%.2f\r\n",Current_val_2);
+//		printf("{Current_val_2}:%.2f\r\n",Current_val_2);
 		
 //		printf("{q_f}%.2f,%.2f\r\n	",Grid_PLL.freq_hz,Grid_PLL.v_q);
 //		printf("{sample_theta}%.2f,%.2f\r\n	",Grid_PLL.v_alpha ,Grid_PLL.theta);
 	//*****************************************************************************//
-//	printf("{Three_phase_line_U}:%.2f,%.2f,%.2f\r\n",U_uv,U_vw,U_uw);
-    /* USER CODE END WHILE */
+//		printf("{Three_phase_line_U}:%.2f,%.2f,%.2f\r\n",U_uv,U_vw,U_uw);
+//		printf("{d_q_feedback}:%.2f,%.2f\r\n",dq_vd_feedback,dq_vq_feedback);
+    /* USER CO0DE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }

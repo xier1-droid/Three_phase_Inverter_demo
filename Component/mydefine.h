@@ -55,6 +55,9 @@ extern float U_uv,U_vw,U_uw;
 extern float U_u,U_v,U_w;
 //相电流
 extern float Three_phase_I_u,Three_phase_I_w,Three_phase_I_v;
+//反馈Park变换
+extern volatile float dq_vd_feedback;
+extern volatile float dq_vq_feedback;
 
 extern TIM_HandleTypeDef htim8;
 

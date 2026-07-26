@@ -226,14 +226,15 @@ typedef struct
 /* UART and the TIM8 ISR share the volatile parameters and status values. */
 static DqVoltagePi dq_vd_pi = {0.0f};
 static DqVoltagePi dq_vq_pi = {0.0f};
-static volatile float dq_voltage_kp = 0.0f;
-static volatile float dq_voltage_ki = 0.0f;
-static volatile float dq_line_voltage_ref_rms = 32.0f;
+volatile float dq_voltage_kp = 0.045f;//0.075
+volatile float dq_voltage_ki = 0.006f;
+static volatile float dq_line_voltage_ref_rms = 30.3f;
 static volatile float dq_vd_reference = 0.0f;
-static volatile float dq_vd_feedback = 0.0f;
-static volatile float dq_vq_feedback = 0.0f;
+volatile float dq_vd_feedback = 0.0f;
+volatile float dq_vq_feedback = 0.0f;
 static volatile float dq_ud_command = 0.0f;
 static volatile float dq_uq_command = 0.0f;
+static volatile float v_alpha_feedback,v_beta_feedback;
 
 static float theta = 0.0f;          // 角度发生器状态
 
@@ -241,9 +242,10 @@ static float theta = 0.0f;          // 角度发生器状态
 static volatile uint8_t fault_latched = 0;
 static volatile uint8_t stop_requested = 0;
 
-#define CURRENT_TRIP_A          4.0f
+#define CURRENT_TRIP_A          5.0f
 #define OVERCURRENT_TRIP_COUNT  3
 static uint8_t overcurrent_count = 0;
+static uint8_t tim8_pwm_channels_started = 0;
 
 /* Clear dynamic state whenever PWM operation starts or stops. */
 static void DqVoltagePi_Reset(void)
@@ -266,7 +268,7 @@ static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
     float kp = dq_voltage_kp;
     float ki = dq_voltage_ki;
     // 计算预积分项：历史积分值 + 积分系数×控制周期×偏差
-    float integral_candidate = pi->integral + ki * DQ_CONTROL_TS_S * error;
+    float integral_candidate = pi->integral + ki * kp * error;
     // PI控制器原始输出 = 比例项 + 预积分项
     float output = kp * error + integral_candidate;
 
@@ -361,12 +363,30 @@ void Inverter_Wave_Start_TIM8(void)
     DqVoltagePi_Reset();
     soft_start_ratio = 0.0f;   // 从0开始软启动斜坡
 
-    HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
-    HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
-    HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
-	  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
-    HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_3);
+    /* HAL marks PWM channels BUSY, so start them only once. */
+    if (!tim8_pwm_channels_started)
+    {
+        HAL_StatusTypeDef ch1_status = HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
+        HAL_StatusTypeDef ch1n_status = HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_1);
+        HAL_StatusTypeDef ch2_status = HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
+        HAL_StatusTypeDef ch2n_status = HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
+        HAL_StatusTypeDef ch3_status = HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
+        HAL_StatusTypeDef ch3n_status = HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_3);
+
+        if ((ch1_status != HAL_OK) || (ch1n_status != HAL_OK) ||
+            (ch2_status != HAL_OK) || (ch2n_status != HAL_OK) ||
+            (ch3_status != HAL_OK) || (ch3n_status != HAL_OK))
+        {
+            __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
+            wave_enable_tim8 = 0;
+            return;
+        }
+
+        tim8_pwm_channels_started = 1;
+    }
+
+    /* A logical stop only clears MOE; restart by enabling MOE again. */
+    __HAL_TIM_MOE_ENABLE(&htim8);
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 4200);
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 4200);
 		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, 4200);
@@ -583,14 +603,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		}
 
 		/* Clarke变换、Park变换采用线电压定义：U_uv = U_u - U_v，U_vw = U_v - U_w */
-		float v_alpha_feedback = U_u;
-		float v_beta_feedback = (U_v - U_w) * DQ_INV_SQRT_THREE;
+		v_alpha_feedback = U_u;
+		v_beta_feedback = Voltage_val * DQ_INV_SQRT_THREE;
+//		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((v_alpha_feedback+30.0f)/60.0f)*4096));
+//		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((v_beta_feedback+30.0f)/60.0f)*4096));
 		// Park变换，αβ→dq，得到d轴电压反馈
 		dq_vd_feedback = v_alpha_feedback * cos_theta
 					+ v_beta_feedback * sin_theta;
 		// q轴电压反馈
 		dq_vq_feedback = -v_alpha_feedback * sin_theta
 					+ v_beta_feedback * cos_theta;
+//		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((dq_vd_feedback+30.0f)/60.0f)*4096));
+//		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((dq_vq_feedback+30.0f)/60.0f)*4096));
+		
+
 
 		/* 母线给定vref为线电压有效值；vd_ref为相电压峰值给定 */
 		dq_vd_reference = dq_line_voltage_ref_rms
