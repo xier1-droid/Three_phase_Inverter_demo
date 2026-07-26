@@ -1,0 +1,222 @@
+#include "Uart_cmp.h"
+#include "stm32f4xx_hal_uart.h"
+
+#define TX_BUF_SIZE 256
+
+static uint8_t  uart_tx_busy = 0;          // 0=���� 1=æ
+static uint8_t  uart_tx_buf[TX_BUF_SIZE];  // ���ͻ���
+static uint16_t uart_tx_len = 0;           // ���η��ͳ���
+
+#define UART_RX_DMA_BUFFER_SIZE 512
+#define UART_DMA_BUFFER_SIZE 512
+
+uint8_t uart_rx_dma_buffer[UART_RX_DMA_BUFFER_SIZE];
+uint8_t uart_dma_buffer[UART_DMA_BUFFER_SIZE];
+volatile uint8_t uart_flag = 0;
+
+
+void Uart_init(void)
+{  	
+	__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+	HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart_rx_dma_buffer, sizeof(uart_rx_dma_buffer));
+}
+
+int my_printf(UART_HandleTypeDef *huart, const char *format, ...)
+{
+    // æ��ֱ�Ӷ��������ȵ���С������
+    // ����㲻�붪�����Һ����ٽ���Ӷ���
+    if (uart_tx_busy) return 0;
+
+    va_list arg;
+    va_start(arg, format);
+    int len = vsnprintf((char *)uart_tx_buf, TX_BUF_SIZE, format, arg);
+    va_end(arg);
+
+    if (len <= 0) return 0;
+    if (len > TX_BUF_SIZE) len = TX_BUF_SIZE;
+
+    uart_tx_len = (uint16_t)len;
+    uart_tx_busy = 1;
+
+    if (HAL_UART_Transmit_IT(huart, uart_tx_buf, uart_tx_len) != HAL_OK)
+    {
+        uart_tx_busy = 0; // ����ʧ�ܣ��ͷ�
+        return 0;
+    }
+    return len;
+}
+
+extern SOGI_PLL_T Grid_PLL;
+extern PR_T PR_Current;
+extern PID_T PID_Voltage;
+
+// name=value command table, single-pass parse (see uart_proc below)
+typedef struct
+{
+    const char *name;
+    void (*handler)(float val);
+} uart_cmd_t;
+
+static void cmd_kp(float v)
+{
+    pll_loopfilter_set_kpki(&Grid_PLL.loopfilter, v, Grid_PLL.loopfilter.Ki);
+    my_printf(&huart1, "kp=%.4f ki=%.4f\r\n", Grid_PLL.loopfilter.Kp, Grid_PLL.loopfilter.Ki);
+}
+
+static void cmd_ki(float v)
+{
+    pll_loopfilter_set_kpki(&Grid_PLL.loopfilter, Grid_PLL.loopfilter.Kp, v);
+    my_printf(&huart1, "kp=%.4f ki=%.4f\r\n", Grid_PLL.loopfilter.Kp, Grid_PLL.loopfilter.Ki);
+}
+
+static void cmd_prp(float v)
+{
+    PR_Current.Kp = v;
+    my_printf(&huart1, "PR: Kp=%.4f Kr=%.4f wc=%.4f\r\n",
+              PR_Current.Kp, PR_Current.Kr, PR_Current.OMEGA_C);
+}
+
+static void cmd_prr(float v)
+{
+    PR_Current.Kr = v;
+    __disable_irq();
+    PR_Precompute(&PR_Current);
+    __enable_irq();
+    my_printf(&huart1, "PR: Kp=%.4f Kr=%.4f wc=%.4f\r\n",
+              PR_Current.Kp, PR_Current.Kr, PR_Current.OMEGA_C);
+}
+
+static void cmd_prwc(float v)
+{
+    PR_Current.OMEGA_C = v;
+    __disable_irq();
+    PR_Precompute(&PR_Current);
+    __enable_irq();
+    my_printf(&huart1, "PR: Kp=%.4f Kr=%.4f wc=%.4f\r\n",
+              PR_Current.Kp, PR_Current.Kr, PR_Current.OMEGA_C);
+}
+
+static void cmd_vp(float v)
+{
+    PID_Voltage.kp = v;
+    my_printf(&huart1, "PID_Voltage: kp=%.4f ki=%.4f\r\n", PID_Voltage.kp, PID_Voltage.ki);
+}
+
+static void cmd_vi(float v)
+{
+    PID_Voltage.ki = v;
+    my_printf(&huart1, "PID_Voltage: kp=%.4f ki=%.4f\r\n", PID_Voltage.kp, PID_Voltage.ki);
+}
+
+static void cmd_wave8(float v)
+{
+    if (v != 0.0f)
+        Inverter_Start();
+    else
+        Inverter_Stop();
+    my_printf(&huart1, "wave8=%d\r\n", wave_enable_tim8);
+}
+
+static void cmd_clrfault(float v)
+{
+    if (v != 0.0f)
+        Inverter_ClearFault();
+    my_printf(&huart1, "clrfault done, wave8=%d\r\n", wave_enable_tim8);
+}
+
+static const uart_cmd_t uart_cmds[] =
+{
+    {"kp", cmd_kp},
+    {"ki", cmd_ki},
+    {"prp", cmd_prp},
+    {"prr", cmd_prr},
+    {"prwc", cmd_prwc},
+    {"vp", cmd_vp},
+    {"vi", cmd_vi},
+    {"wave8", cmd_wave8},
+    {"clrfault", cmd_clrfault},
+};
+#define UART_CMD_COUNT (sizeof(uart_cmds) / sizeof(uart_cmds[0]))
+
+// @brief non-blocking uart command processing, called from main loop
+void uart_proc(void)
+{
+    // 1. no new frame received yet, return immediately
+    if(uart_flag == 0)
+        return;
+
+    // 2. clear receive flag to avoid re-processing the same frame
+    uart_flag = 0;
+
+    // 3. single-pass parse: find '=' once, match name against command table
+    char *eq = strchr((char *)uart_dma_buffer, '=');
+    uint8_t any_matched = 0;
+
+    if (eq != NULL)
+    {
+        size_t name_len = (size_t)(eq - (char *)uart_dma_buffer);
+        float val = 0.0f;
+
+        if (sscanf(eq + 1, "%f", &val) == 1)
+        {
+            for (size_t idx = 0; idx < UART_CMD_COUNT; idx++)
+            {
+                size_t cmd_len = strlen(uart_cmds[idx].name);
+                if (name_len == cmd_len &&
+                    strncmp((char *)uart_dma_buffer, uart_cmds[idx].name, name_len) == 0)
+                {
+                    uart_cmds[idx].handler(val);
+                    any_matched = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // no known command matched: echo back the raw received data
+    if (!any_matched)
+    {
+        my_printf(&huart1,"%s\n",uart_dma_buffer);
+    }
+    // note: DMA reception fills the buffer via interrupt, main loop only polls uart_flag
+    // 4. clear receive buffer, ready for next frame
+    memset(uart_dma_buffer, 0, sizeof(uart_dma_buffer));
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        uart_tx_busy = 0; // ������ɣ��ͷ�
+    }
+}
+
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+    // 1. ȷ����Ŀ�괮�� (USART1)
+    if (huart->Instance == USART1)
+    {
+        // 2. ����ֹͣ��ǰ�� DMA ���� (������ڽ�����)
+        //    ��Ϊ�����ж���ζ�ŷ��ͷ��Ѿ�ֹͣ����ֹ DMA �����ȴ������
+        HAL_UART_DMAStop(huart);
+
+        // 3. �� DMA ����������Ч������ (Size ���ֽ�) ���Ƶ�������������
+        memcpy(uart_dma_buffer, uart_rx_dma_buffer, Size); 
+        // ע�⣺����ʹ���� Size��ֻ����ʵ�ʽ��յ�������
+
+        // 4. ����"����֪ͨ��"��������ѭ�������ݴ�����
+        uart_flag = 1;
+
+        // 5. ��� DMA ���ջ�������Ϊ�´ν�����׼��
+        //    ��Ȼ memcpy ֻ������ Size �������������������������
+        memset(uart_rx_dma_buffer, 0, sizeof(uart_rx_dma_buffer));
+
+        // 6. **�ؼ�������������һ�� DMA ���н���**
+        //    �����ٴε��ã�����ֻ�������һ��
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart_rx_dma_buffer, sizeof(uart_rx_dma_buffer));
+        
+        // 7. ���֮ǰ�ر��˰����жϣ�������Ҫ�������ٴιر� (������Ҫ)
+         __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+    }
+}

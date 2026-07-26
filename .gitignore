@@ -1,0 +1,55 @@
+# Keil build output
+MDK-ARM/Single_phase_Inverter/
+MDK-ARM/DebugConfig/
+MDK-ARM/*.lst
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.bak
+MDK-ARM/JLinkLog.txt
+
+# Compiler and linker artifacts
+*.o
+*.obj
+*.d
+*.crf
+*.axf
+*.elf
+*.hex
+*.bin
+*.map
+*.lnp
+*.dep
+*.build_log.htm
+
+# AI assistant local state and generated workflow data
+.claude/
+.codex/
+.cursor/
+.continue/
+.windsurf/
+.gemini/
+.spec-workflow/
+.aider*
+CLAUDE.local.md
+AGENTS.local.md
+
+# Editor and IDE local state
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+*.suo
+*.user
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*.orig
+*.log
+*~
