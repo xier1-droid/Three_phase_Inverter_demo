@@ -206,6 +206,7 @@ volatile uint8_t wave_enable_tim8 = 0;   // 0=未发波（上电默认），1=已发波
 #define PHASE_SHIFT_C  267
 
 // ==== 三相开环 SVPWM（第一轮） ====
+/* DQ voltage-loop constants. All voltage values are in volts. */
 #define DQ_CONTROL_TS_S               0.00005f
 #define DQ_SQRT_TWO_THIRDS            0.816496581f
 #define DQ_INV_SQRT_THREE             0.577350269f
@@ -216,11 +217,13 @@ volatile uint8_t wave_enable_tim8 = 0;   // 0=未发波（上电默认），1=已发波
 #define DQ_VOLTAGE_KI_MAX             500.0f
 #define DQ_LINE_VOLTAGE_REF_MAX_V     32.0f
 
+/* Each axis has its own integral state; Kp and Ki are shared. */
 typedef struct
 {
     float integral;
 } DqVoltagePi;
 
+/* UART and the TIM8 ISR share the volatile parameters and status values. */
 static DqVoltagePi dq_vd_pi = {0.0f};
 static DqVoltagePi dq_vq_pi = {0.0f};
 static volatile float dq_voltage_kp = 0.0f;
@@ -242,6 +245,7 @@ static volatile uint8_t stop_requested = 0;
 #define OVERCURRENT_TRIP_COUNT  3
 static uint8_t overcurrent_count = 0;
 
+/* Clear dynamic state whenever PWM operation starts or stops. */
 static void DqVoltagePi_Reset(void)
 {
     dq_vd_pi.integral = 0.0f;
@@ -251,6 +255,10 @@ static void DqVoltagePi_Reset(void)
     dq_uq_command = 0.0f;
 }
 
+/*
+ * Return a bounded inverter-voltage correction.
+ * Conditional integration prevents windup and still permits unwinding.
+ */
 static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
 {
     float kp = dq_voltage_kp;
@@ -279,6 +287,7 @@ static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
     return output;
 }
 
+/* Ordered bounds also reject NaN and infinite tuning values. */
 void Inverter_SetVoltageKp(float kp)
 {
     if ((kp >= 0.0f) && (kp <= DQ_VOLTAGE_KP_MAX))
@@ -318,6 +327,7 @@ float Inverter_GetLineVoltageRef(void)
     return dq_line_voltage_ref_rms;
 }
 
+/* Copy the latest ISR values for non-real-time diagnostics. */
 void Inverter_GetVoltageStatus(InverterVoltageStatus *status)
 {
     if (status == NULL)
@@ -530,6 +540,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		//************************************占空比更新************************************//		
 
 		// 角度发生器：50Hz @ 20kHz
+		/* Advance the synchronous 50 Hz frame once per control tick. */
 		theta += 2.0f * 3.1415926f * 50.0f / 20000.0f;
 		if (theta >= 6.2831853f)
 		{
@@ -539,6 +550,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float sin_theta = sinf(theta);
 		float cos_theta = cosf(theta);
 
+		/* Ramp the reference to zero before disabling PWM outputs. */
 		if (stop_requested)
 		{
 			soft_start_ratio -= SOFT_START_STEP;
@@ -559,7 +571,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			}
 		}
 
-		/* U_uv = U_u - U_v and U_vw = U_v - U_w. */
+		/* Clarke and Park use U_uv = U_u - U_v and U_vw = U_v - U_w. */
 		float v_alpha_feedback = U_u;
 		float v_beta_feedback = (U_v - U_w) * DQ_INV_SQRT_THREE;
 		dq_vd_feedback = v_alpha_feedback * cos_theta
@@ -572,6 +584,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		                  * DQ_SQRT_TWO_THIRDS
 		                  * soft_start_ratio;
 
+		/* Add bounded PI corrections to the feedforward voltage reference. */
 		float ud_correction = DqVoltagePi_Update(
 			&dq_vd_pi, dq_vd_reference - dq_vd_feedback);
 		float uq_correction = DqVoltagePi_Update(
@@ -580,6 +593,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		dq_ud_command = dq_vd_reference + ud_correction;
 		dq_uq_command = uq_correction;
 
+		/* Keep the vector inside the 5%-95% SVPWM duty range. */
 		float vector_magnitude_sq = dq_ud_command * dq_ud_command
 		                            + dq_uq_command * dq_uq_command;
 		float vector_limit_sq = DQ_VECTOR_LIMIT_V * DQ_VECTOR_LIMIT_V;
@@ -590,6 +604,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			dq_uq_command *= vector_scale;
 		}
 
+		/* Inverse Park and inverse Clarke create the three phase commands. */
 		float u_alpha = dq_ud_command * cos_theta
 		                - dq_uq_command * sin_theta;
 		float u_beta = dq_ud_command * sin_theta
@@ -599,6 +614,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float ub = -0.5f * u_alpha + 0.8660254f * u_beta;
 		float uc = -0.5f * u_alpha - 0.8660254f * u_beta;
 
+		/* Min-max common-mode injection implements SVPWM. */
 		float u_max = fmaxf(ua, fmaxf(ub, uc));
 		float u_min = fminf(ua, fminf(ub, uc));
 		float u_zero = -0.5f * (u_max + u_min);
@@ -607,6 +623,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float ub_svpwm = ub + u_zero;
 		float uc_svpwm = uc + u_zero;
 
+		/* Convert phase commands in volts to normalized timer duties. */
 		float duty_a = 0.5f + ua_svpwm / DQ_VDC_NOMINAL_V;
 		float duty_b = 0.5f + ub_svpwm / DQ_VDC_NOMINAL_V;
 		float duty_c = 0.5f + uc_svpwm / DQ_VDC_NOMINAL_V;

@@ -111,6 +111,7 @@ static void cmd_vi(float v)
 
 static void cmd_vref(float v)
 {
+    /* The user-facing reference is line-to-line RMS voltage. */
     Inverter_SetLineVoltageRef(v);
     my_printf(&huart1, "vref=%.3f Vrms line-to-line\r\n",
               Inverter_GetLineVoltageRef());
@@ -123,6 +124,7 @@ static void cmd_vstat(float v)
 
     (void)v;
     Inverter_GetVoltageStatus(&status);
+    /* Keep this diagnostic sqrtf outside the 20 kHz control ISR. */
     vll_feedback_rms = sqrtf(status.vd * status.vd + status.vq * status.vq)
                        * 1.224744871f;
 
