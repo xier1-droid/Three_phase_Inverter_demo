@@ -6,13 +6,14 @@
 
 - 20 kHz 三相互补 PWM 输出，包含死区配置
 - 固定 50 Hz 角度发生器
-- DQ 电压指令、逆 Park、逆 Clarke 与最值注入 SVPWM
+- DQ 单电压环、电压参考前馈与 d/q 双 PI 修正
+- 逆 Park、逆 Clarke 与最值注入 SVPWM
 - 电压软启动和软停止
 - 两相电流采样与第三相电流重构
 - 连续采样过流锁存和人工故障清除
 - UART 参数命令和运行控制
 
-DQ 单电压闭环尚未接入当前控制路径，设计与调试步骤记录在 `三相逆变器闭环规划.md` 中。
+电压环默认 `Kp=0`、`Ki=0`，烧录后仍由电压前馈工作。首次闭环调试应先使用低线电压参考确认采样极性和 DQ 方向，再逐步增加 PI 参数。设计与调试记录见 `三相逆变器闭环规划.md`。
 
 ## 主要参数
 
@@ -52,6 +53,11 @@ MDK-ARM/    Keil project files
 wave8=1       Start inverter output
 wave8=0       Request soft stop
 clrfault=1    Clear a latched software fault
+vref=3        Set 3 Vrms line-to-line voltage reference
+vref=32       Set 32 Vrms line-to-line voltage reference
+vp=0.05       Set shared d/q voltage-loop Kp
+vi=2          Set shared d/q voltage-loop Ki in 1/s
+vstat=1       Print voltage-loop references, feedback and output
 ```
 
 其余调试命令可在 `Component/Uart_cmp.c` 的命令表中查看。

@@ -48,7 +48,6 @@ int my_printf(UART_HandleTypeDef *huart, const char *format, ...)
 
 extern SOGI_PLL_T Grid_PLL;
 extern PR_T PR_Current;
-extern PID_T PID_Voltage;
 
 // name=value command table, single-pass parse (see uart_proc below)
 typedef struct
@@ -98,14 +97,41 @@ static void cmd_prwc(float v)
 
 static void cmd_vp(float v)
 {
-    PID_Voltage.kp = v;
-    my_printf(&huart1, "PID_Voltage: kp=%.4f ki=%.4f\r\n", PID_Voltage.kp, PID_Voltage.ki);
+    Inverter_SetVoltageKp(v);
+    my_printf(&huart1, "DQ_Voltage: kp=%.4f ki=%.4f\r\n",
+              Inverter_GetVoltageKp(), Inverter_GetVoltageKi());
 }
 
 static void cmd_vi(float v)
 {
-    PID_Voltage.ki = v;
-    my_printf(&huart1, "PID_Voltage: kp=%.4f ki=%.4f\r\n", PID_Voltage.kp, PID_Voltage.ki);
+    Inverter_SetVoltageKi(v);
+    my_printf(&huart1, "DQ_Voltage: kp=%.4f ki=%.4f\r\n",
+              Inverter_GetVoltageKp(), Inverter_GetVoltageKi());
+}
+
+static void cmd_vref(float v)
+{
+    Inverter_SetLineVoltageRef(v);
+    my_printf(&huart1, "vref=%.3f Vrms line-to-line\r\n",
+              Inverter_GetLineVoltageRef());
+}
+
+static void cmd_vstat(float v)
+{
+    InverterVoltageStatus status;
+    float vll_feedback_rms;
+
+    (void)v;
+    Inverter_GetVoltageStatus(&status);
+    vll_feedback_rms = sqrtf(status.vd * status.vd + status.vq * status.vq)
+                       * 1.224744871f;
+
+    my_printf(&huart1,
+              "vll_ref=%.3f vd_ref=%.3f vd=%.3f vq=%.3f "
+              "vll_fb=%.3f ud=%.3f uq=%.3f kp=%.4f ki=%.4f\r\n",
+              status.vll_ref_rms, status.vd_ref, status.vd, status.vq,
+              vll_feedback_rms, status.ud_cmd, status.uq_cmd,
+              status.kp, status.ki);
 }
 
 static void cmd_wave8(float v)
@@ -133,6 +159,8 @@ static const uart_cmd_t uart_cmds[] =
     {"prwc", cmd_prwc},
     {"vp", cmd_vp},
     {"vi", cmd_vi},
+    {"vref", cmd_vref},
+    {"vstat", cmd_vstat},
     {"wave8", cmd_wave8},
     {"clrfault", cmd_clrfault},
 };

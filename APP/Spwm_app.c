@@ -206,9 +206,33 @@ volatile uint8_t wave_enable_tim8 = 0;   // 0=未发波（上电默认），1=已发波
 #define PHASE_SHIFT_C  267
 
 // ==== 三相开环 SVPWM（第一轮） ====
+#define DQ_CONTROL_TS_S               0.00005f
+#define DQ_SQRT_TWO_THIRDS            0.816496581f
+#define DQ_INV_SQRT_THREE             0.577350269f
+#define DQ_VDC_NOMINAL_V              60.0f
+#define DQ_VECTOR_LIMIT_V             31.1769145f
+#define DQ_PI_CORRECTION_LIMIT_V      3.0f
+#define DQ_VOLTAGE_KP_MAX             2.0f
+#define DQ_VOLTAGE_KI_MAX             500.0f
+#define DQ_LINE_VOLTAGE_REF_MAX_V     32.0f
+
+typedef struct
+{
+    float integral;
+} DqVoltagePi;
+
+static DqVoltagePi dq_vd_pi = {0.0f};
+static DqVoltagePi dq_vq_pi = {0.0f};
+static volatile float dq_voltage_kp = 0.0f;
+static volatile float dq_voltage_ki = 0.0f;
+static volatile float dq_line_voltage_ref_rms = 32.0f;
+static volatile float dq_vd_reference = 0.0f;
+static volatile float dq_vd_feedback = 0.0f;
+static volatile float dq_vq_feedback = 0.0f;
+static volatile float dq_ud_command = 0.0f;
+static volatile float dq_uq_command = 0.0f;
+
 static float theta = 0.0f;          // 角度发生器状态
-static float ud_target = 26.1280f;      // 先用小值验证，验证通过后改为 26.128f
-static float uq_target = 0.0f;
 
 // ===== 设备状态 + 启停控制 + 参数读写 =====
 static volatile uint8_t fault_latched = 0;
@@ -218,8 +242,102 @@ static volatile uint8_t stop_requested = 0;
 #define OVERCURRENT_TRIP_COUNT  3
 static uint8_t overcurrent_count = 0;
 
+static void DqVoltagePi_Reset(void)
+{
+    dq_vd_pi.integral = 0.0f;
+    dq_vq_pi.integral = 0.0f;
+    dq_vd_reference = 0.0f;
+    dq_ud_command = 0.0f;
+    dq_uq_command = 0.0f;
+}
+
+static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
+{
+    float kp = dq_voltage_kp;
+    float ki = dq_voltage_ki;
+    float integral_candidate = pi->integral + ki * DQ_CONTROL_TS_S * error;
+    float output = kp * error + integral_candidate;
+
+    if (output > DQ_PI_CORRECTION_LIMIT_V)
+    {
+        if (error < 0.0f)
+        {
+            pi->integral = integral_candidate;
+        }
+        return DQ_PI_CORRECTION_LIMIT_V;
+    }
+    if (output < -DQ_PI_CORRECTION_LIMIT_V)
+    {
+        if (error > 0.0f)
+        {
+            pi->integral = integral_candidate;
+        }
+        return -DQ_PI_CORRECTION_LIMIT_V;
+    }
+
+    pi->integral = integral_candidate;
+    return output;
+}
+
+void Inverter_SetVoltageKp(float kp)
+{
+    if ((kp >= 0.0f) && (kp <= DQ_VOLTAGE_KP_MAX))
+    {
+        dq_voltage_kp = kp;
+    }
+}
+
+void Inverter_SetVoltageKi(float ki)
+{
+    if ((ki >= 0.0f) && (ki <= DQ_VOLTAGE_KI_MAX))
+    {
+        dq_voltage_ki = ki;
+    }
+}
+
+void Inverter_SetLineVoltageRef(float vll_rms)
+{
+    if ((vll_rms >= 0.0f) && (vll_rms <= DQ_LINE_VOLTAGE_REF_MAX_V))
+    {
+        dq_line_voltage_ref_rms = vll_rms;
+    }
+}
+
+float Inverter_GetVoltageKp(void)
+{
+    return dq_voltage_kp;
+}
+
+float Inverter_GetVoltageKi(void)
+{
+    return dq_voltage_ki;
+}
+
+float Inverter_GetLineVoltageRef(void)
+{
+    return dq_line_voltage_ref_rms;
+}
+
+void Inverter_GetVoltageStatus(InverterVoltageStatus *status)
+{
+    if (status == NULL)
+    {
+        return;
+    }
+
+    status->vll_ref_rms = dq_line_voltage_ref_rms;
+    status->vd_ref = dq_vd_reference;
+    status->vd = dq_vd_feedback;
+    status->vq = dq_vq_feedback;
+    status->ud_cmd = dq_ud_command;
+    status->uq_cmd = dq_uq_command;
+    status->kp = dq_voltage_kp;
+    status->ki = dq_voltage_ki;
+}
+
 void Inverter_Wave_Start_TIM8(void)
 {
+    DqVoltagePi_Reset();
     soft_start_ratio = 0.0f;   // 从0开始软启动斜坡
 
     HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
@@ -236,7 +354,8 @@ void Inverter_Wave_Start_TIM8(void)
 }
 
 void Inverter_Wave_Stop_TIM8(void)
-{ 
+{
+    DqVoltagePi_Reset();
     wave_enable_tim8 = 0;
 
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 4200);
@@ -277,6 +396,7 @@ void Inverter_ClearFault(void)
     {
         overcurrent_count = 0;
         fault_latched = 0;
+        DqVoltagePi_Reset();
     }
 }
 
@@ -410,15 +530,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		//************************************占空比更新************************************//		
 
 		// 角度发生器：50Hz @ 20kHz
-		theta += 2 * 3.1415926f * 50.0f / 20000.0f;              // 2*pi*50/20000
-		if (theta >= 6.2831853f) theta -= 6.2831853f;
+		theta += 2.0f * 3.1415926f * 50.0f / 20000.0f;
+		if (theta >= 6.2831853f)
+		{
+			theta -= 6.2831853f;
+		}
 
-		// dq 指令（软起：0 -> ud_target，复用现有 soft_start_ratio 斜坡）
-		float ud = ud_target * soft_start_ratio;
-		float uq = uq_target;   
-		float sinf_theta = sinf(theta);
-		float cosf_theta = cosf(theta);
-		
+		float sin_theta = sinf(theta);
+		float cos_theta = cosf(theta);
+
 		if (stop_requested)
 		{
 			soft_start_ratio -= SOFT_START_STEP;
@@ -427,7 +547,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 				soft_start_ratio = 0.0f;
 				stop_requested = 0;
 				Inverter_Wave_Stop_TIM8();
-//				my_printf(&huart1,"System STOP");
+				return;
 			}
 		}
 		else if (soft_start_ratio < 1.0f)
@@ -436,23 +556,49 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			if (soft_start_ratio >= 1.0f)
 			{
 				soft_start_ratio = 1.0f;
-//				my_printf(&huart1,"System RUN");
 			}
 		}
-		
-		// 逆Park
-		float u_alpha = ud * cosf_theta - uq * sinf_theta;
-		float u_beta  = ud * sinf_theta + uq * cosf_theta;
 
-		// 逆Clarke
+		/* U_uv = U_u - U_v and U_vw = U_v - U_w. */
+		float v_alpha_feedback = U_u;
+		float v_beta_feedback = (U_v - U_w) * DQ_INV_SQRT_THREE;
+		dq_vd_feedback = v_alpha_feedback * cos_theta
+		                 + v_beta_feedback * sin_theta;
+		dq_vq_feedback = -v_alpha_feedback * sin_theta
+		                 + v_beta_feedback * cos_theta;
+
+		/* vref is line-to-line RMS voltage; vd_ref is phase peak voltage. */
+		dq_vd_reference = dq_line_voltage_ref_rms
+		                  * DQ_SQRT_TWO_THIRDS
+		                  * soft_start_ratio;
+
+		float ud_correction = DqVoltagePi_Update(
+			&dq_vd_pi, dq_vd_reference - dq_vd_feedback);
+		float uq_correction = DqVoltagePi_Update(
+			&dq_vq_pi, -dq_vq_feedback);
+
+		dq_ud_command = dq_vd_reference + ud_correction;
+		dq_uq_command = uq_correction;
+
+		float vector_magnitude_sq = dq_ud_command * dq_ud_command
+		                            + dq_uq_command * dq_uq_command;
+		float vector_limit_sq = DQ_VECTOR_LIMIT_V * DQ_VECTOR_LIMIT_V;
+		if (vector_magnitude_sq > vector_limit_sq)
+		{
+			float vector_scale = DQ_VECTOR_LIMIT_V / sqrtf(vector_magnitude_sq);
+			dq_ud_command *= vector_scale;
+			dq_uq_command *= vector_scale;
+		}
+
+		float u_alpha = dq_ud_command * cos_theta
+		                - dq_uq_command * sin_theta;
+		float u_beta = dq_ud_command * sin_theta
+		               + dq_uq_command * cos_theta;
+
 		float ua = u_alpha;
 		float ub = -0.5f * u_alpha + 0.8660254f * u_beta;
 		float uc = -0.5f * u_alpha - 0.8660254f * u_beta;
-		
-//		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((ua+5.0f)/10.0f)*4096));
-//		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((ub+5.0f)/10.0f)*4096));
 
-		// 最值注入 SVPWM
 		float u_max = fmaxf(ua, fmaxf(ub, uc));
 		float u_min = fminf(ua, fminf(ub, uc));
 		float u_zero = -0.5f * (u_max + u_min);
@@ -461,20 +607,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float ub_svpwm = ub + u_zero;
 		float uc_svpwm = uc + u_zero;
 
-		// 转占空比（Vdc = 60V）
-		float duty_a = 0.5f + ua_svpwm / 60.0f;
-		float duty_b = 0.5f + ub_svpwm / 60.0f;
-		float duty_c = 0.5f + uc_svpwm / 60.0f;
+		float duty_a = 0.5f + ua_svpwm / DQ_VDC_NOMINAL_V;
+		float duty_b = 0.5f + ub_svpwm / DQ_VDC_NOMINAL_V;
+		float duty_c = 0.5f + uc_svpwm / DQ_VDC_NOMINAL_V;
 
-		// 限幅
 		duty_a = fminf(fmaxf(duty_a, 0.05f), 0.95f);
 		duty_b = fminf(fmaxf(duty_b, 0.05f), 0.95f);
-		duty_c = fminf(fmaxf(duty_c, 0.05f), 0.95f);  
-		      
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, (uint32_t)(duty_a * 8400.0f));
-		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, (uint32_t)(duty_b * 8400.0f));
-		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, (uint32_t)(duty_c * 8400.0f));
-		
+		duty_c = fminf(fmaxf(duty_c, 0.05f), 0.95f);
+
+		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1,
+		                          (uint32_t)(duty_a * 8400.0f));
+		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
+		                          (uint32_t)(duty_b * 8400.0f));
+		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3,
+		                          (uint32_t)(duty_c * 8400.0f));
 			count++;
 
      if(count>=2000)
