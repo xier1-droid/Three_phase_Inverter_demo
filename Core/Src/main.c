@@ -68,8 +68,8 @@ extern SOGI_PLL_T Grid_PLL;
 
 extern uint16_t i;
 //交直流偏置
-extern uint32_t adc_val_buffer[];
-extern uint32_t adc_val_buffer_2[];
+extern volatile uint32_t adc_val_buffer[];
+extern volatile uint32_t adc_val_buffer_2[];
 extern LowPassFilter_t Voltage_Offset_Filter;
 extern LowPassFilter_t Current_Offset_Filter;
 extern LowPassFilter_t Voltage_Offset_Filter_2;
@@ -144,7 +144,26 @@ int main(void)
 	f32_PI_Init(&PI_C ,5e-5f , 0.3f, 0.2f, 1, -1);
 	PR_Precompute(&PR_Current);
 	sogi_pll_init(&Grid_PLL, 1.0f, 50.0f, 5e-5f, 1.0f, 10.0f, 2.0f*pi*8.0f);
-	adc_tim_dma_init();
+	if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_val_buffer, 2) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc_val_buffer_2, 2) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	__HAL_DMA_DISABLE_IT(&hdma_adc1, DMA_IT_HT | DMA_IT_TC);
+	__HAL_DMA_DISABLE_IT(&hdma_adc2, DMA_IT_HT | DMA_IT_TC);
+	if (HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	__HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
+	if (HAL_TIM_Base_Start_IT(&htim8) != HAL_OK)
+	{
+		Error_Handler();
+	}
+	HAL_Delay(2);
 
 	//�ϵ�ֱ��ƫ��У׼: PWM/�ж���δ����,ADC���ɱ���ֱ������,�ɿ��������ֵ��ƽ��
 	{
@@ -169,7 +188,6 @@ int main(void)
 		LowPass_Init(&Current_Offset_Filter_2, 0.9999f, c_offset_init_2);
 	}
 	
-	HAL_TIM_Base_Start_IT(&htim8);
 	HAL_TIM_Base_Start_IT(&htim13);
 //  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);// 启动定时器8 通道1
 //  HAL_TIMEx_PWMN_Start(&htim8,TIM_CHANNEL_1);//启动定时器8 通道1的互补通道

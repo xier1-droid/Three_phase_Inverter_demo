@@ -101,6 +101,27 @@ void MX_TIM8_Init(void)
   }
   /* USER CODE BEGIN TIM8_Init 2 */
 
+  /* Generate the ADC trigger at the center of each PWM period. */
+  TIM_OC_InitTypeDef sConfigOC4 = {0};
+  TIM_MasterConfigTypeDef sAdcMasterConfig = {0};
+
+  sConfigOC4.OCMode = TIM_OCMODE_PWM2;
+  sConfigOC4.Pulse = 4200;
+  sConfigOC4.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC4.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC4.OCIdleState = TIM_OCIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC4, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sAdcMasterConfig.MasterOutputTrigger = TIM_TRGO_OC4REF;
+  sAdcMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sAdcMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
   /* USER CODE END TIM8_Init 2 */
   HAL_TIM_MspPostInit(&htim8);
 
