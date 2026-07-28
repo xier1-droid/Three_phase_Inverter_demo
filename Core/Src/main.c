@@ -29,6 +29,7 @@
 /* USER CODE BEGIN Includes */
 #include "mydefine.h" // ȫ�ֶ���ͷ�ļ�
 #include "stdio.h"
+#include "Inverter_sampling.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,37 +50,6 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
-#define RMS_FILTER_LEN  256
-#define pi 3.1415926f
-#define sqrt_2 1.414213562f
-// 缓冲区
-float Voltage_Rms_Buffer[RMS_FILTER_LEN];
-float Current_Rms_Buffer[RMS_FILTER_LEN];
-extern MovingAverageFilter_t voltage_filter;
-extern MovingAverageFilter_t current_filter;
-extern LowPassFilter_t LPF_Current;
-extern PID_T PID_Voltage;
-extern PID_T PID_Current;
-extern PR_T PR_Current;
-extern PI_TypeDef PI_C;
-extern float PID_OUT_C,Iref_inst;
-extern SOGI_PLL_T Grid_PLL;
-
-extern uint16_t i;
-//交直流偏置
-extern volatile uint32_t adc_val_buffer[];
-extern volatile uint32_t adc_val_buffer_2[];
-extern LowPassFilter_t Voltage_Offset_Filter;
-extern LowPassFilter_t Current_Offset_Filter;
-extern LowPassFilter_t Voltage_Offset_Filter_2;
-extern LowPassFilter_t Current_Offset_Filter_2;
-
-
-float P_v=3.8f,I_v=0.01f,target_v=24.0f;//1.65 0.028
-float P_c=0.08f,I_c=0.03f,target_c=0.5f * sqrt_2;		//电流幅值
-float PR_p_c=0.03f,PR_r_c=6.0f;
-
 
 /* USER CODE END PV */
 
@@ -128,67 +98,17 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM8_Init();
   MX_DAC_Init();
-  MX_TIM13_Init();
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
 //	Delay_Init();
 //	OLED_I2C_Init();
 //	OLED_Init();
 	Uart_init();
-	MovingAverage_Init(&voltage_filter, Voltage_Rms_Buffer, RMS_FILTER_LEN);
-	MovingAverage_Init(&current_filter, Current_Rms_Buffer, RMS_FILTER_LEN);
-	LowPass_Init(&LPF_Current,0.5 , 0);
-	pid_init(&PID_Voltage, P_v, I_v , 0 , 0, 1);
-	pid_init(&PID_Current, P_c, I_c , 0 , 0, 1);
-	pr_init(&PR_Current, PR_p_c, PR_r_c, 2*pi*50.0f, 3,5e-5f);
-	f32_PI_Init(&PI_C ,5e-5f , 0.3f, 0.2f, 1, -1);
-	PR_Precompute(&PR_Current);
-	sogi_pll_init(&Grid_PLL, 1.0f, 50.0f, 5e-5f, 1.0f, 10.0f, 2.0f*pi*8.0f);
-	if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_val_buffer, 2) != HAL_OK)
+	Inverter_Init();
+	if (!InverterSampling_Init())
 	{
 		Error_Handler();
 	}
-	if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adc_val_buffer_2, 2) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	__HAL_DMA_DISABLE_IT(&hdma_adc1, DMA_IT_HT | DMA_IT_TC);
-	__HAL_DMA_DISABLE_IT(&hdma_adc2, DMA_IT_HT | DMA_IT_TC);
-	if (HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	__HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
-	if (HAL_TIM_Base_Start_IT(&htim8) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	HAL_Delay(2);
-
-	//�ϵ�ֱ��ƫ��У׼: PWM/�ж���δ����,ADC���ɱ���ֱ������,�ɿ��������ֵ��ƽ��
-	{
-		#define ADC_OFFSET_CALIB_SAMPLES 256
-		uint32_t v_sum = 0, c_sum = 0;
-		uint32_t v_sum_2 = 0, c_sum_2 = 0;
-		for (uint16_t n = 0; n < ADC_OFFSET_CALIB_SAMPLES; n++)
-		{
-			v_sum += adc_val_buffer[1];
-			c_sum += adc_val_buffer[0];
-			v_sum_2 += adc_val_buffer_2[1];
-			c_sum_2 += adc_val_buffer_2[0];
-			HAL_Delay(1);
-		}
-		float v_offset_init = (float)v_sum / ADC_OFFSET_CALIB_SAMPLES;
-		float c_offset_init = (float)c_sum / ADC_OFFSET_CALIB_SAMPLES;
-		float v_offset_init_2 = (float)v_sum_2 / ADC_OFFSET_CALIB_SAMPLES;
-		float c_offset_init_2 = (float)c_sum_2 / ADC_OFFSET_CALIB_SAMPLES;
-		LowPass_Init(&Voltage_Offset_Filter, 0.9999f, v_offset_init);
-		LowPass_Init(&Current_Offset_Filter, 0.9999f, c_offset_init);
-		LowPass_Init(&Voltage_Offset_Filter_2, 0.9999f, v_offset_init_2);
-		LowPass_Init(&Current_Offset_Filter_2, 0.9999f, c_offset_init_2);
-	}
-	
-	HAL_TIM_Base_Start_IT(&htim13);
 //  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);// 启动定时器8 通道1
 //  HAL_TIMEx_PWMN_Start(&htim8,TIM_CHANNEL_1);//启动定时器8 通道1的互补通道
 //	 HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);// 启动定时器8 通道1

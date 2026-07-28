@@ -1864,11 +1864,6 @@
               <FilePath>..\APP\scheduler.c</FilePath>
             </File>
             <File>
-              <FileName>Oled_app.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\APP\Oled_app.c</FilePath>
-            </File>
-            <File>
               <FileName>Spwm_app.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\APP\Spwm_app.c</FilePath>
@@ -1894,14 +1889,14 @@
               <FilePath>..\Component\Dq_control.c</FilePath>
             </File>
             <File>
-              <FileName>Oled_cmp.c</FileName>
+              <FileName>Inverter_sampling.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Component\Oled_cmp.c</FilePath>
+              <FilePath>..\Component\Inverter_sampling.c</FilePath>
             </File>
             <File>
-              <FileName>Oled_Font.c</FileName>
+              <FileName>Svpwm.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Component\Oled_Font.c</FilePath>
+              <FilePath>..\Component\Svpwm.c</FilePath>
             </File>
             <File>
               <FileName>Key_cmp.c</FileName>
@@ -1909,29 +1904,9 @@
               <FilePath>..\Component\Key_cmp.c</FilePath>
             </File>
             <File>
-              <FileName>Adc_cmp.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Component\Adc_cmp.c</FilePath>
-            </File>
-            <File>
               <FileName>Filter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Component\Filter.c</FilePath>
-            </File>
-            <File>
-              <FileName>Pid.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Component\Pid.c</FilePath>
-            </File>
-            <File>
-              <FileName>Pr.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Component\Pr.c</FilePath>
-            </File>
-            <File>
-              <FileName>Sogi_pll.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Component\Sogi_pll.c</FilePath>
             </File>
           </Files>
         </Group>

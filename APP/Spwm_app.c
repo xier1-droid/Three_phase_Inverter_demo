@@ -1,450 +1,158 @@
 #include "Spwm_app.h"
+#include "Inverter_sampling.h"
+#include "Svpwm.h"
 
+#define DQ_SQRT_TWO_THIRDS 0.816496581f
+#define DQ_VDC_NOMINAL_V 60.0f
+#define CURRENT_TRIP_A 5.0f
+#define OVERCURRENT_TRIP_COUNT 3U
 
-
-const float sine_wave[400] = {
-    // === 第1象限 (100个点，正向递增) ===
-    33.0f, 99.0f, 165.0f, 231.0f, 297.0f, 362.0f, 428.0f, 494.0f, 559.0f, 624.0f,
-    690.0f, 755.0f, 819.0f, 884.0f, 948.0f, 1013.0f, 1076.0f, 1140.0f, 1203.0f, 1266.0f,
-    1329.0f, 1392.0f, 1454.0f, 1515.0f, 1577.0f, 1638.0f, 1698.0f, 1758.0f, 1818.0f, 1877.0f,
-    1936.0f, 1994.0f, 2052.0f, 2110.0f, 2166.0f, 2223.0f, 2278.0f, 2333.0f, 2388.0f, 2442.0f,
-    2495.0f, 2548.0f, 2600.0f, 2652.0f, 2703.0f, 2753.0f, 2802.0f, 2851.0f, 2899.0f, 2946.0f,
-    2993.0f, 3039.0f, 3084.0f, 3129.0f, 3172.0f, 3215.0f, 3257.0f, 3298.0f, 3339.0f, 3378.0f,
-    3417.0f, 3455.0f, 3492.0f, 3528.0f, 3564.0f, 3598.0f, 3632.0f, 3664.0f, 3696.0f, 3727.0f,
-    3757.0f, 3786.0f, 3814.0f, 3841.0f, 3868.0f, 3893.0f, 3917.0f, 3940.0f, 3963.0f, 3984.0f,
-    4005.0f, 4024.0f, 4042.0f, 4060.0f, 4076.0f, 4092.0f, 4106.0f, 4119.0f, 4132.0f, 4143.0f,
-    4153.0f, 4163.0f, 4171.0f, 4178.0f, 4184.0f, 4190.0f, 4194.0f, 4197.0f, 4199.0f, 4200.0f,
-
-    // === 第2象限 (100个点，正向递减) ===
-    4200.0f, 4199.0f, 4197.0f, 4194.0f, 4190.0f, 4184.0f, 4178.0f, 4171.0f, 4163.0f, 4153.0f,
-    4143.0f, 4132.0f, 4119.0f, 4106.0f, 4092.0f, 4076.0f, 4060.0f, 4042.0f, 4024.0f, 4005.0f,
-    3984.0f, 3963.0f, 3940.0f, 3917.0f, 3893.0f, 3868.0f, 3841.0f, 3814.0f, 3786.0f, 3757.0f,
-    3727.0f, 3696.0f, 3664.0f, 3632.0f, 3598.0f, 3564.0f, 3528.0f, 3492.0f, 3455.0f, 3417.0f,
-    3378.0f, 3339.0f, 3298.0f, 3257.0f, 3215.0f, 3172.0f, 3129.0f, 3084.0f, 3039.0f, 2993.0f,
-    2946.0f, 2899.0f, 2851.0f, 2802.0f, 2753.0f, 2703.0f, 2652.0f, 2600.0f, 2548.0f, 2495.0f,
-    2442.0f, 2388.0f, 2333.0f, 2278.0f, 2223.0f, 2166.0f, 2110.0f, 2052.0f, 1994.0f, 1936.0f,
-    1877.0f, 1818.0f, 1758.0f, 1698.0f, 1638.0f, 1577.0f, 1515.0f, 1454.0f, 1392.0f, 1329.0f,
-    1266.0f, 1203.0f, 1140.0f, 1076.0f, 1013.0f, 948.0f, 884.0f, 819.0f, 755.0f, 690.0f,
-    624.0f, 559.0f, 494.0f, 428.0f, 362.0f, 297.0f, 231.0f, 165.0f, 99.0f, 33.0f,
-
-    // === 第3象限 (100个点，负向递增) ===
-    -33.0f, -99.0f, -165.0f, -231.0f, -297.0f, -362.0f, -428.0f, -494.0f, -559.0f, -624.0f,
-    -690.0f, -755.0f, -819.0f, -884.0f, -948.0f, -1013.0f, -1076.0f, -1140.0f, -1203.0f, -1266.0f,
-    -1329.0f, -1392.0f, -1454.0f, -1515.0f, -1577.0f, -1638.0f, -1698.0f, -1758.0f, -1818.0f, -1877.0f,
-    -1936.0f, -1994.0f, -2052.0f, -2110.0f, -2166.0f, -2223.0f, -2278.0f, -2333.0f, -2388.0f, -2442.0f,
-    -2495.0f, -2548.0f, -2600.0f, -2652.0f, -2703.0f, -2753.0f, -2802.0f, -2851.0f, -2899.0f, -2946.0f,
-    -2993.0f, -3039.0f, -3084.0f, -3129.0f, -3172.0f, -3215.0f, -3257.0f, -3298.0f, -3339.0f, -3378.0f,
-    -3417.0f, -3455.0f, -3492.0f, -3528.0f, -3564.0f, -3598.0f, -3632.0f, -3664.0f, -3696.0f, -3727.0f,
-    -3757.0f, -3786.0f, -3814.0f, -3841.0f, -3868.0f, -3893.0f, -3917.0f, -3940.0f, -3963.0f, -3984.0f,
-    -4005.0f, -4024.0f, -4042.0f, -4060.0f, -4076.0f, -4092.0f, -4106.0f, -4119.0f, -4132.0f, -4143.0f,
-    -4153.0f, -4163.0f, -4171.0f, -4178.0f, -4184.0f, -4190.0f, -4194.0f, -4197.0f, -4199.0f, -4200.0f,
-
-    // === 第4象限 (100个点，负向递减) ===
-    -4200.0f, -4199.0f, -4197.0f, -4194.0f, -4190.0f, -4184.0f, -4178.0f, -4171.0f, -4163.0f, -4153.0f,
-    -4143.0f, -4132.0f, -4119.0f, -4106.0f, -4092.0f, -4076.0f, -4060.0f, -4042.0f, -4024.0f, -4005.0f,
-    -3984.0f, -3963.0f, -3940.0f, -3917.0f, -3893.0f, -3868.0f, -3841.0f, -3814.0f, -3786.0f, -3757.0f,
-    -3727.0f, -3696.0f, -3664.0f, -3632.0f, -3598.0f, -3564.0f, -3528.0f, -3492.0f, -3455.0f, -3417.0f,
-    -3378.0f, -3339.0f, -3298.0f, -3257.0f, -3215.0f, -3172.0f, -3129.0f, -3084.0f, -3039.0f, -2993.0f,
-    -2946.0f, -2899.0f, -2851.0f, -2802.0f, -2753.0f, -2703.0f, -2652.0f, -2600.0f, -2548.0f, -2495.0f,
-    -2442.0f, -2388.0f, -2333.0f, -2278.0f, -2223.0f, -2166.0f, -2110.0f, -2052.0f, -1994.0f, -1936.0f,
-    -1877.0f, -1818.0f, -1758.0f, -1698.0f, -1638.0f, -1577.0f, -1515.0f, -1454.0f, -1392.0f, -1329.0f,
-    -1266.0f, -1203.0f, -1140.0f, -1076.0f, -1013.0f, -948.0f, -884.0f, -819.0f, -755.0f, -690.0f,
-    -624.0f, -559.0f, -494.0f, -428.0f, -362.0f, -297.0f, -231.0f, -165.0f, -99.0f, -33.0f
-
-};
-
-float Mid_Value = 4200.0f;   
-
-volatile uint16_t i = 0;//主机索引
-volatile uint16_t k = 0;//从机索引
-uint16_t count;                
-
-//原始采样值
-float Voltage_Get=0;
-float Current_Get=0;
-//有效值
-float Voltage_Rms=0;
-float Current_Rms=0;
-//瞬时值
-float Voltage_val=0;
-float Current_val=0;	
-//原始采样值0-3.3V
-float ADC_v_val = 0;
-float ADC_c_val = 0;
-
-//原始采样值
-float Voltage_Get_2=0;
-float Current_Get_2=0;
-//有效值
-float Voltage_Rms_2=0;
-float Current_Rms_2=0;
-//瞬时值
-float Voltage_val_2=0;
-float Current_val_2=0;	
-//原始采样值0-3.3V
-float ADC_v_val_2 = 0;
-float ADC_c_val_2 = 0;
-
-//线电压
-float U_uv,U_vw,U_uw;
-//相电压
-float U_u,U_v,U_w;
-//相电流
-float Three_phase_I_u,Three_phase_I_w,Three_phase_I_v;
-
-
-
-#define RMS_WINDOW 400
-float current_square_sum = 0.0f;
-float current_buffer[RMS_WINDOW] = {0};  
-uint16_t current_idx = 0;
-
-/**
- * @brief 计算电流有效值(RMS)
- * @param x 输入的瞬时电流值
- * @return 返回电流有效值
- * @details 使用滑动窗口算法计算RMS值，窗口大小为400个采样点
- */
-float C_cal_rms(float x)
-{
-    float square = x * x;                    // 计算瞬时电流的平方
-    
-    // 减去最老的一个平方值（把最早的数据“踢出去”）
-    current_square_sum -= current_buffer[current_idx];
-    
-    // 存入新的平方值
-    current_buffer[current_idx] = square;
-    current_square_sum += square;
-    
-    // 指针往前走一格，满了就从头开始（环形）
-    current_idx = (current_idx + 1) % RMS_WINDOW;
-    
-    // 计算当前窗口的均方值，再开方得到RMS
-    float mean_square = current_square_sum / RMS_WINDOW;
-    return sqrtf(mean_square);
-}
-
-// 全局变量或结构体里定义
-float voltage_square_sum = 0.0f;
-float voltage_buffer[RMS_WINDOW] = {0};  // 用来存最近400个电压的平方值
-uint16_t voltage_idx = 0;
-
-/**
- * @brief 计算电压有效值(RMS)
- * @param x 输入的瞬时电压值
- * @return 返回电压有效值
- * @details 使用滑动窗口算法计算RMS值，窗口大小为400个采样点
- */
-float V_cal_rms(float x)
-{
-    float square = x * x;
-    
-    // 先减去最老的一个平方值
-    voltage_square_sum -= voltage_buffer[voltage_idx];
-    
-    // 存入新的平方值
-    voltage_buffer[voltage_idx] = square;
-    voltage_square_sum += square;
-    
-    // 移动指针
-    voltage_idx = (voltage_idx + 1) % RMS_WINDOW;
-    
-    // 计算RMS
-    float mean_square = voltage_square_sum / RMS_WINDOW;
-    return sqrtf(mean_square);
-}
-
-/*
-float Voltage_Rms=0;
-float Current_Rms=0;
-float Voltage_Get=0;
-float Current_Get=0;
-*/
-
-extern uint32_t adc_val_buffer[];
-extern uint32_t adc_val_buffer_2[];
-//有效值平均滤波器
-MovingAverageFilter_t voltage_filter;
-MovingAverageFilter_t current_filter;
-float Voltage_Rms_Filtered = 0;
-float Current_Rms_Filtered = 0;
-//瞬时值低通滤波器
-LowPassFilter_t LPF_Current;
-//滤除50HZ得到偏移量 变量
-LowPassFilter_t Voltage_Offset_Filter;
-LowPassFilter_t Current_Offset_Filter;
-LowPassFilter_t Voltage_Offset_Filter_2;
-LowPassFilter_t Current_Offset_Filter_2;
-//PID调节器
-PID_T PID_Voltage;
-float PID_OUT_V = 0.0f;
-PID_T PID_Current;
-float PID_OUT_C = 0.0f;	
-//PR调节器
-PR_T PR_Current;          
-float PR_OUT_C = 0.0f;
-//
-PI_TypeDef PI_C;
-
-//SOGI-PLL环
-SOGI_PLL_T Grid_PLL;
-
-float sine_norm,Iref_inst;
-
-float phase_offset_rad = 0.0f;//1.570796f; //手动相位偏差调节
-
-#define MAX_VOLTAGE     45.0f     // 根据你实际最大target修改，比如30.0f也行
-#define MAX_MODULATION  1.0f      // PID_OUT的最大合理值，通常1.0就够
-
-// —— 电流环软启动 ——
 static float soft_start_ratio = 0.0f;      // 0.0 ~ 1.0，当前软启动系数
 #define SOFT_START_CYCLES   50.0f   // 软启动持续的基波周期数（50Hz下 20周期≈0.4s）
 #define SOFT_START_STEP     (1.0f / (SOFT_START_CYCLES * 400.0f))  // 每次TIM8中断（每周期400点）的增量
 
 volatile uint8_t wave_enable_tim8 = 0;   // 0=未发波（上电默认），1=已发波
-#define PHASE_SHIFT_B  133
-#define PHASE_SHIFT_C  267
-
-// ==== 三相开环 SVPWM（第一轮） ====
-/* DQ voltage-loop constants. All voltage values are in volts. */
-#define DQ_CONTROL_TS_S               0.00005f
-#define DQ_SQRT_TWO_THIRDS            0.816496581f//sqrt（2/3）
-#define DQ_VDC_NOMINAL_V              60.0f
-#define DQ_PI_CORRECTION_LIMIT_V      3.0f
-#define DQ_VOLTAGE_KP_MAX             2.0f
-#define DQ_VOLTAGE_KI_MAX             500.0f
-#define DQ_LINE_VOLTAGE_REF_MAX_V     32.0f
-
-/* Each axis has its own integral state; Kp and Ki are shared. */
-#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
-typedef struct
-{
-    float integral;
-} DqVoltagePi;
-
-static DqVoltagePi dq_vd_pi = {0.0f};
-static DqVoltagePi dq_vq_pi = {0.0f};
-#endif
-/* UART and the TIM8 ISR share the volatile parameters and status values. */
-volatile float dq_voltage_kp = 0.035f;//0.045-0.006
-volatile float dq_voltage_ki = 0.006f;
-static volatile float dq_line_voltage_ref_rms = 30.6f;
-static volatile float dq_vd_reference = 0.0f;
-volatile float dq_vd_feedback = 0.0f;
-volatile float dq_vq_feedback = 0.0f;
-static volatile float dq_ud_command = 0.0f;
-static volatile float dq_uq_command = 0.0f;
-static volatile float dq_id_reference = 0.0f;
-static volatile float dq_iq_reference = 0.0f;
-static volatile float dq_id_feedback = 0.0f;
-static volatile float dq_iq_feedback = 0.0f;
-static volatile float dq_vdc_feedback = DQ_VDC_NOMINAL_V;
-static volatile uint8_t dq_current_ref_limited = 0U;
-static volatile uint8_t dq_voltage_limited = 0U;
-static volatile float v_alpha_feedback,v_beta_feedback;
-
-static float theta = 0.0f;          // 角度发生器状态
-
 // ===== 设备状态 + 启停控制 + 参数读写 =====
 static volatile uint8_t fault_latched = 0;
 static volatile uint8_t stop_requested = 0;
-
-#define CURRENT_TRIP_A          5.0f
-#define OVERCURRENT_TRIP_COUNT  3
 static uint8_t overcurrent_count = 0;
 static uint8_t tim8_pwm_channels_started = 0;
+static uint16_t count = 0U;
+static float theta = 0.0f;
+static InverterConfig inverter_config;
+static InverterStatus inverter_status;
+static DqControl dq_control;
+static InverterMeasurements measurements;
 
-/* Clear dynamic state whenever PWM operation starts or stops. */
-static void DqVoltagePi_Reset(void)
+static void Inverter_ResetControlState(void)
 {
-#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
-    dq_vd_pi.integral = 0.0f;
-    dq_vq_pi.integral = 0.0f;
-#endif
-    dq_vd_reference = 0.0f;
-    dq_ud_command = 0.0f;
-    dq_uq_command = 0.0f;
-    dq_id_reference = 0.0f;
-    dq_iq_reference = 0.0f;
-    dq_id_feedback = 0.0f;
-    dq_iq_feedback = 0.0f;
-    dq_current_ref_limited = 0U;
-    dq_voltage_limited = 0U;
-    DqCascade_Reset();
+    DqControl_Reset(&dq_control);
+    inverter_status.vd_ref = 0.0f;
+    inverter_status.vd = 0.0f;
+    inverter_status.vq = 0.0f;
+    inverter_status.id_ref = 0.0f;
+    inverter_status.id = 0.0f;
+    inverter_status.iq_ref = 0.0f;
+    inverter_status.iq = 0.0f;
+    inverter_status.ud = 0.0f;
+    inverter_status.uq = 0.0f;
+    inverter_status.current_ref_limited = 0U;
+    inverter_status.voltage_limited = 0U;
 }
 
-#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
-/*
- * 返回限幅约束后的逆变器电压校正量
- * 采用条件积分策略，抑制积分饱和，同时可实现积分退饱和
- */
-// DQ轴电压PI控制器迭代更新函数
-static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
+void Inverter_Init(void)
 {
-    // 读取PI比例、积分系数
-    float kp = dq_voltage_kp;
-    float ki = dq_voltage_ki;
-    // 计算预积分项：历史积分值 + 积分系数×控制周期×偏差
-    float integral_candidate = pi->integral + ki * kp * error;
-    // PI控制器原始输出 = 比例项 + 预积分项
-    float output = kp * error + integral_candidate;
+    memset(&inverter_status, 0, sizeof(inverter_status));
+    memset(&measurements, 0, sizeof(measurements));
 
-    // 正向输出超过电压校正上限限幅
-    if (output > DQ_PI_CORRECTION_LIMIT_V)
+    inverter_config.vll_ref_rms = 30.6f;
+    inverter_config.voltage_kp = 0.035f;
+    inverter_config.voltage_ki = 0.006f;
+    inverter_config.outer_kp = 0.0f;
+    inverter_config.outer_ki = 0.0f;
+    inverter_config.current_kp = 0.0f;
+    inverter_config.current_ki = 0.0f;
+    inverter_config.vdc = DQ_VDC_NOMINAL_V;
+
+    DqControl_Init(&dq_control, &inverter_config);
+    inverter_status.mode = DQ_CONTROL_MODE;
+    inverter_status.config = inverter_config;
+}
+
+bool Inverter_SetParameter(InverterParameter parameter, float value)
+{
+    InverterConfig new_config = inverter_config;
+    uint32_t primask;
+    uint8_t reset_required = 0U;
+
+    switch (parameter)
     {
-        // 仅当偏差为负（输出有回落趋势）时，才更新积分值（条件积分防饱和）
-        if (error < 0.0f)
-        {
-            pi->integral = integral_candidate;
-        }
-        // 输出钳位至上限
-        return DQ_PI_CORRECTION_LIMIT_V;
+        case INVERTER_PARAMETER_VLL_REF_RMS:
+            if (!((value >= 0.0f) &&
+                  (value <= DQ_LINE_VOLTAGE_REF_MAX_V)))
+            {
+                return false;
+            }
+            new_config.vll_ref_rms = value;
+            break;
+
+        case INVERTER_PARAMETER_VOLTAGE_KP:
+            if (!((value >= 0.0f) && (value <= DQ_VOLTAGE_KP_MAX)))
+            {
+                return false;
+            }
+            new_config.voltage_kp = value;
+            break;
+
+        case INVERTER_PARAMETER_VOLTAGE_KI:
+            if (!((value >= 0.0f) && (value <= DQ_VOLTAGE_KI_MAX)))
+            {
+                return false;
+            }
+            new_config.voltage_ki = value;
+            break;
+
+        case INVERTER_PARAMETER_OUTER_KP:
+            if ((wave_enable_tim8 != 0U) ||
+                !((value >= 0.0f) && (value <= DQ_OUTER_KP_MAX)))
+            {
+                return false;
+            }
+            new_config.outer_kp = value;
+            reset_required = 1U;
+            break;
+
+        case INVERTER_PARAMETER_OUTER_KI:
+            if ((wave_enable_tim8 != 0U) ||
+                !((value >= 0.0f) && (value <= DQ_OUTER_KI_MAX)))
+            {
+                return false;
+            }
+            new_config.outer_ki = value;
+            reset_required = 1U;
+            break;
+
+        case INVERTER_PARAMETER_CURRENT_KP:
+            if ((wave_enable_tim8 != 0U) ||
+                !((value >= 0.0f) && (value <= DQ_CURRENT_KP_MAX)))
+            {
+                return false;
+            }
+            new_config.current_kp = value;
+            reset_required = 1U;
+            break;
+
+        case INVERTER_PARAMETER_CURRENT_KI:
+            if ((wave_enable_tim8 != 0U) ||
+                !((value >= 0.0f) && (value <= DQ_CURRENT_KI_MAX)))
+            {
+                return false;
+            }
+            new_config.current_ki = value;
+            reset_required = 1U;
+            break;
+
+        default:
+            return false;
     }
-    // 负向输出低于电压校正下限限幅
-    if (output < -DQ_PI_CORRECTION_LIMIT_V)
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    inverter_config = new_config;
+    DqControl_SetConfig(&dq_control, &inverter_config);
+    inverter_status.config = inverter_config;
+    if (reset_required != 0U)
     {
-        // 仅当偏差为正（输出有回升趋势）时，更新积分值
-        if (error > 0.0f)
-        {
-            pi->integral = integral_candidate;
-        }
-        // 输出钳位至下限
-        return -DQ_PI_CORRECTION_LIMIT_V;
+        Inverter_ResetControlState();
     }
-
-    // 输出未触及限幅区间，正常更新积分并输出完整PI结果
-    pi->integral = integral_candidate;
-    return output;
-}
-#endif
-
-/* Ordered bounds also reject NaN and infinite tuning values. */
-void Inverter_SetVoltageKp(float kp)
-{
-    if ((kp >= 0.0f) && (kp <= DQ_VOLTAGE_KP_MAX))
+    if (primask == 0U)
     {
-        dq_voltage_kp = kp;
+        __enable_irq();
     }
+    return true;
 }
 
-void Inverter_SetVoltageKi(float ki)
-{
-    if ((ki >= 0.0f) && (ki <= DQ_VOLTAGE_KI_MAX))
-    {
-        dq_voltage_ki = ki;
-    }
-}
-
-void Inverter_SetLineVoltageRef(float vll_rms)
-{
-    if ((vll_rms >= 0.0f) && (vll_rms <= DQ_LINE_VOLTAGE_REF_MAX_V))
-    {
-        dq_line_voltage_ref_rms = vll_rms;
-    }
-}
-
-float Inverter_GetVoltageKp(void)
-{
-    return dq_voltage_kp;
-}
-
-float Inverter_GetVoltageKi(void)
-{
-    return dq_voltage_ki;
-}
-
-float Inverter_GetLineVoltageRef(void)
-{
-    return dq_line_voltage_ref_rms;
-}
-
-/* Copy the latest ISR values for non-real-time diagnostics. */
-void Inverter_GetVoltageStatus(InverterVoltageStatus *status)
-{
-    if (status == NULL)
-    {
-        return;
-    }
-
-    status->vll_ref_rms = dq_line_voltage_ref_rms;
-    status->vd_ref = dq_vd_reference;
-    status->vd = dq_vd_feedback;
-    status->vq = dq_vq_feedback;
-    status->ud_cmd = dq_ud_command;
-    status->uq_cmd = dq_uq_command;
-    status->kp = dq_voltage_kp;
-    status->ki = dq_voltage_ki;
-}
-
-uint8_t Inverter_SetOuterKp(float value)
-{
-    if ((wave_enable_tim8 != 0U) ||
-        !((value >= 0.0f) && (value <= DQ_OUTER_KP_MAX)))
-    {
-        return 0U;
-    }
-    DqCascade_SetOuterKp(value);
-    DqCascade_Reset();
-    return 1U;
-}
-
-uint8_t Inverter_SetOuterKi(float value)
-{
-    if ((wave_enable_tim8 != 0U) ||
-        !((value >= 0.0f) && (value <= DQ_OUTER_KI_MAX)))
-    {
-        return 0U;
-    }
-    DqCascade_SetOuterKi(value);
-    DqCascade_Reset();
-    return 1U;
-}
-
-uint8_t Inverter_SetCurrentKp(float value)
-{
-    if ((wave_enable_tim8 != 0U) ||
-        !((value >= 0.0f) && (value <= DQ_CURRENT_KP_MAX)))
-    {
-        return 0U;
-    }
-    DqCascade_SetCurrentKp(value);
-    DqCascade_Reset();
-    return 1U;
-}
-
-uint8_t Inverter_SetCurrentKi(float value)
-{
-    if ((wave_enable_tim8 != 0U) ||
-        !((value >= 0.0f) && (value <= DQ_CURRENT_KI_MAX)))
-    {
-        return 0U;
-    }
-    DqCascade_SetCurrentKi(value);
-    DqCascade_Reset();
-    return 1U;
-}
-
-float Inverter_GetOuterKp(void)
-{
-    return DqCascade_GetOuterKp();
-}
-
-float Inverter_GetOuterKi(void)
-{
-    return DqCascade_GetOuterKi();
-}
-
-float Inverter_GetCurrentKp(void)
-{
-    return DqCascade_GetCurrentKp();
-}
-
-float Inverter_GetCurrentKi(void)
-{
-    return DqCascade_GetCurrentKi();
-}
-
-void Inverter_GetDqStatus(InverterDqStatus *status)
+void Inverter_GetStatus(InverterStatus *status)
 {
     uint32_t primask;
 
@@ -455,23 +163,7 @@ void Inverter_GetDqStatus(InverterDqStatus *status)
 
     primask = __get_PRIMASK();
     __disable_irq();
-    status->mode = DQ_CONTROL_MODE;
-    status->vdc = dq_vdc_feedback;
-    status->vd_ref = dq_vd_reference;
-    status->vd = dq_vd_feedback;
-    status->vq = dq_vq_feedback;
-    status->id_ref = dq_id_reference;
-    status->id = dq_id_feedback;
-    status->iq_ref = dq_iq_reference;
-    status->iq = dq_iq_feedback;
-    status->ud_cmd = dq_ud_command;
-    status->uq_cmd = dq_uq_command;
-    status->outer_kp = DqCascade_GetOuterKp();
-    status->outer_ki = DqCascade_GetOuterKi();
-    status->current_kp = DqCascade_GetCurrentKp();
-    status->current_ki = DqCascade_GetCurrentKi();
-    status->current_ref_limited = dq_current_ref_limited;
-    status->voltage_limited = dq_voltage_limited;
+    *status = inverter_status;
     if (primask == 0U)
     {
         __enable_irq();
@@ -480,7 +172,7 @@ void Inverter_GetDqStatus(InverterDqStatus *status)
 
 void Inverter_Wave_Start_TIM8(void)
 {
-    DqVoltagePi_Reset();
+    Inverter_ResetControlState();
     soft_start_ratio = 0.0f;   // 从0开始软启动斜坡
 
     /* HAL marks PWM channels BUSY, so start them only once. */
@@ -499,6 +191,7 @@ void Inverter_Wave_Start_TIM8(void)
         {
             __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
             wave_enable_tim8 = 0;
+            inverter_status.running = 0U;
             return;
         }
 
@@ -512,12 +205,14 @@ void Inverter_Wave_Start_TIM8(void)
 		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, 4200);
 	
 	    wave_enable_tim8 = 1;
+        inverter_status.running = 1U;
 }
 
 void Inverter_Wave_Stop_TIM8(void)
 {
-    DqVoltagePi_Reset();
+    Inverter_ResetControlState();
     wave_enable_tim8 = 0;
+    inverter_status.running = 0U;
 
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 4200);
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 4200);
@@ -557,7 +252,8 @@ void Inverter_ClearFault(void)
     {
         overcurrent_count = 0;
         fault_latched = 0;
-        DqVoltagePi_Reset();
+        inverter_status.fault_latched = 0U;
+        Inverter_ResetControlState();
     }
 }
 
@@ -574,21 +270,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((sine_wave[i]+4300.0f)/8800.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((ADC_c_val_2+1.75f)/3.3f)*4096));
 					
-		//************************************有效值核算************************************//
-		Voltage_Get = adc_val_buffer[1];
-		Current_Get = adc_val_buffer[0];
-				
-		//????????????(alpha???1,????????????,??????????)
-		float v_offset = LowPass_Update(&Voltage_Offset_Filter, Voltage_Get);
-		float c_offset = LowPass_Update(&Current_Offset_Filter, Current_Get);
-		
-		//????+???0-3.3V
-		ADC_v_val = (Voltage_Get-v_offset) * 3.3f/4096.0f;
-		ADC_c_val = (Current_Get-c_offset) * 3.3f/4096.0f;
-				
-		Current_val = ADC_c_val * 4.629f; //4.51325581f;//2000.0f)/(4.0f*100.0f);//0.5-4.19;0.8~1.0-4.49;2.02A-4.629
-		Voltage_val = ((ADC_v_val * ((39.0f / 2.0f) * 1000))/(3.922f*150.0f))*0.92342f;//32.0V
-				
+		InverterSampling_Update(&measurements);
+		HAL_DAC_SetValue(&hdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R,
+		                 (uint32_t)(((measurements.iu + 3.0f) / 6.0f)
+		                            * 4096.0f));
+
 //		Current_val = (Current_Get * 3.3f/4096.0f) * 4.96f - 7.956f;      // 电流信号标定(A)//4.96
 //		Voltage_val = (Voltage_Get * 3.3f/4096.0f) * 33.125f - 53.66f;  // 电压信号标定(V)
 		
@@ -597,20 +283,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 //		Current_val = LowPass_Update(&LPF_Current, Current_val);
 //		Current_Rms = C_cal_rms(Current_val);//实际控制可以注释，防止sqrt占用时间
-		
-		Voltage_Get_2 = adc_val_buffer_2[1];
-		Current_Get_2 = adc_val_buffer_2[0];		
-		
-		float v_offset_2 = LowPass_Update(&Voltage_Offset_Filter_2, Voltage_Get_2);
-		float c_offset_2 = LowPass_Update(&Current_Offset_Filter_2, Current_Get_2);	
-		
-		ADC_v_val_2 = (Voltage_Get_2-v_offset_2) * 3.3f/4096.0f;
-		ADC_c_val_2 = (Current_Get_2-c_offset_2) * 3.3f/4096.0f;		
-		
-		Current_val_2 = ADC_c_val_2 * 4.57f;//2000.0f)/(4.0f*100.0f);//0.37~0.5→4.121;0.8~1.0→4.39;2.07A-4.57
-		Voltage_val_2 = ((ADC_v_val_2 * ((39.0f / 2.0f) * 1000))/(4.0f*150.0f))*0.9324f;//32.0f				
-		
-		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((Current_val_2+3.0f)/6.0f)*4096));
 
 //		Voltage_Rms_2 = V_cal_rms(Voltage_val_2);//-0.11f-0.5f;//0.3f
 //		Voltage_Rms_Filtered = MovingAverage_Update(&voltage_filter,Voltage_Rms_2);		
@@ -628,25 +300,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //			if (k >= 400) k = 399;
 //		}
 		
-		U_uv = Voltage_val_2;
-		U_vw = Voltage_val;
-		U_uw = U_uv+U_vw;
-		
-		Three_phase_I_u = Current_val_2;
-		Three_phase_I_w = Current_val;
-		// 基尔霍夫电流定律（无中性线电流）求 v 相电流
-		Three_phase_I_v = -(Three_phase_I_u + Three_phase_I_w);
-				
-		// 三相平衡假设下由线电压反解相电压
-		U_u = (2.0f * U_uv + U_vw) / 3.0f;
-		U_v = (U_vw - U_uv) / 3.0f;
-		U_w = -(U_uv + 2.0f * U_vw) / 3.0f;
-		
 		//************************************三相电流过流检测************************************
 		if (wave_enable_tim8)
 		{
 			
-			float i_abs_max = fmaxf(fabsf(Three_phase_I_u),fmaxf(fabsf(Three_phase_I_v), fabsf(Three_phase_I_w)));
+			float i_abs_max = fmaxf(fabsf(measurements.iu),
+			                         fmaxf(fabsf(measurements.iv),
+			                               fabsf(measurements.iw)));
 
 			if (i_abs_max > CURRENT_TRIP_A)
 			{
@@ -660,6 +320,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			if (overcurrent_count >= OVERCURRENT_TRIP_COUNT)
 			{
 				fault_latched = 1;
+				inverter_status.fault_latched = 1U;
 			}
 		
 			// 故障状态处理：关闭SVPWM输出，故障指示灯闪烁
@@ -692,177 +353,87 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((Three_phase_I_v+6.0f)/12.0f)*4096));
 		//************************************占空比更新************************************//		
 
-		// 角度发生器：50Hz @ 20kHz
-		/* Advance the synchronous 50 Hz frame once per control tick. */
-		theta += 2.0f * 3.1415926f * 50.0f / 20000.0f;
-		if (theta >= 6.2831853f)
 		{
-			theta -= 6.2831853f;
-		}
+			DqControlInput control_input;
+			DqControlOutput control_output;
+			SvpwmDuty duty;
+			float sin_theta;
+			float cos_theta;
 
-		float sin_theta = sinf(theta);
-		float cos_theta = cosf(theta);
-		float sin_sample = sin_theta;
-		float cos_sample = cos_theta;
-
-#if DQ_CONTROL_MODE == DQ_VOLTAGE_CURRENT_LOOP
-		/* Rotate back by half a control step to align with the ADC sample. */
-		sin_sample = sin_theta * 0.999969157f
-					 - cos_theta * 0.007853901f;
-		cos_sample = cos_theta * 0.999969157f
-					 + sin_theta * 0.007853901f;
-#endif
-
-		/* Ramp the reference to zero before disabling PWM outputs. */
-		if (stop_requested)
-		{
-			soft_start_ratio -= SOFT_START_STEP;
-			if (soft_start_ratio <= 0.0f)
+			theta += 2.0f * 3.1415926f * 50.0f / 20000.0f;
+			if (theta >= 6.2831853f)
 			{
-				soft_start_ratio = 0.0f;
-				stop_requested = 0;
-				Inverter_Wave_Stop_TIM8();
-				return;
+				theta -= 6.2831853f;
 			}
-		}
-		else if (soft_start_ratio < 1.0f)
-		{
-			soft_start_ratio += SOFT_START_STEP;
-			if (soft_start_ratio >= 1.0f)
-			{
-				soft_start_ratio = 1.0f;
-			}
-		}
+			sin_theta = sinf(theta);
+			cos_theta = cosf(theta);
 
-		/* Clarke变换、Park变换采用线电压定义：U_uv = U_u - U_v，U_vw = U_v - U_w */
-		v_alpha_feedback = U_u;
-		v_beta_feedback = Voltage_val * DQ_INV_SQRT_THREE;
+			if (stop_requested)
+			{
+				soft_start_ratio -= SOFT_START_STEP;
+				if (soft_start_ratio <= 0.0f)
+				{
+					soft_start_ratio = 0.0f;
+					stop_requested = 0;
+					Inverter_Wave_Stop_TIM8();
+					return;
+				}
+			}
+			else if (soft_start_ratio < 1.0f)
+			{
+				soft_start_ratio += SOFT_START_STEP;
+				if (soft_start_ratio >= 1.0f)
+				{
+					soft_start_ratio = 1.0f;
+				}
+			}
+
+			control_input.vd_ref = inverter_config.vll_ref_rms
+			                       * DQ_SQRT_TWO_THIRDS
+			                       * soft_start_ratio;
+			control_input.u_u = measurements.u_u;
+			control_input.u_vw = measurements.u_vw;
+			control_input.iu = measurements.iu;
+			control_input.iv = measurements.iv;
+			control_input.iw = measurements.iw;
+			control_input.sin_theta = sin_theta;
+			control_input.cos_theta = cos_theta;
+
+			DqControl_Step(&dq_control, &control_input, &control_output);
+
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((v_alpha_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((v_beta_feedback+30.0f)/60.0f)*4096));
-		// Park变换，αβ→dq，得到d轴电压反馈
-		dq_vd_feedback = v_alpha_feedback * cos_sample
-					+ v_beta_feedback * sin_sample;
-		// q轴电压反馈
-		dq_vq_feedback = -v_alpha_feedback * sin_sample
-					+ v_beta_feedback * cos_sample;
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((dq_vd_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((dq_vq_feedback+30.0f)/60.0f)*4096));
-		
 
+			Svpwm_Calculate(control_output.ud,
+			                 control_output.uq,
+			                 sin_theta,
+			                 cos_theta,
+			                 inverter_config.vdc,
+			                 &duty);
 
-		/* 母线给定vref为线电压有效值；vd_ref为相电压峰值给定 */
-		dq_vd_reference = dq_line_voltage_ref_rms
-						* DQ_SQRT_TWO_THIRDS
-						* soft_start_ratio;
+			inverter_status.vd_ref = control_input.vd_ref;
+			inverter_status.vd = control_output.vd;
+			inverter_status.vq = control_output.vq;
+			inverter_status.id_ref = control_output.id_ref;
+			inverter_status.id = control_output.id;
+			inverter_status.iq_ref = control_output.iq_ref;
+			inverter_status.iq = control_output.iq;
+			inverter_status.ud = control_output.ud;
+			inverter_status.uq = control_output.uq;
+			inverter_status.current_ref_limited =
+				control_output.current_ref_limited;
+			inverter_status.voltage_limited =
+				control_output.voltage_limited;
 
-		/* Transform measured phase currents into the synchronous frame. */
-		{
-			float i_alpha = Three_phase_I_u;
-			float i_beta = (Three_phase_I_v - Three_phase_I_w)
-							 * DQ_INV_SQRT_THREE;
-			dq_id_feedback = i_alpha * cos_sample + i_beta * sin_sample;
-			dq_iq_feedback = -i_alpha * sin_sample + i_beta * cos_sample;
+			__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1,
+			                          (uint32_t)(duty.duty_a * 8400.0f));
+			__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
+			                          (uint32_t)(duty.duty_b * 8400.0f));
+			__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3,
+			                          (uint32_t)(duty.duty_c * 8400.0f));
 		}
-
-		dq_vdc_feedback = DQ_VDC_NOMINAL_V;
-#if DQ_CONTROL_MODE == DQ_OPEN_LOOP
-		dq_ud_command = dq_vd_reference;
-		dq_uq_command = 0.0f;
-		dq_id_reference = 0.0f;
-		dq_iq_reference = 0.0f;
-		dq_current_ref_limited = 0U;
-		dq_voltage_limited = 0U;
-#elif DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
-		/* 将限幅PI校正量叠加至前馈电压给定值 */
-		// d轴电压PI调节器，输入误差=给定d轴电压 - 反馈d轴电压
-		float ud_correction = DqVoltagePi_Update(
-			&dq_vd_pi, dq_vd_reference - dq_vd_feedback);
-		// q轴电压PI调节器，无q轴电压给定，误差取负的q轴反馈
-		float uq_correction = DqVoltagePi_Update(
-			&dq_vq_pi, -dq_vq_feedback);
-
-		// d轴指令电压 = 前馈给定 + PI校正输出
-		dq_ud_command = dq_vd_reference + ud_correction;
-		// q轴指令电压仅使用PI校正输出，无直流前馈项
-		dq_uq_command = uq_correction;
-		dq_id_reference = 0.0f;
-		dq_iq_reference = 0.0f;
-		dq_current_ref_limited = 0U;
-		dq_voltage_limited = 0U;
-#else
-		{
-			DqCascadeInput cascade_input;
-			DqCascadeOutput cascade_output;
-
-			cascade_input.vd_ref = dq_vd_reference;
-			cascade_input.vq_ref = 0.0f;
-			cascade_input.vd = dq_vd_feedback;
-			cascade_input.vq = dq_vq_feedback;
-			cascade_input.id = dq_id_feedback;
-			cascade_input.iq = dq_iq_feedback;
-			cascade_input.vdc = dq_vdc_feedback;
-			cascade_input.omega_rad_s = 314.1592654f;
-			DqCascade_Step(&cascade_input, &cascade_output);
-
-			dq_id_reference = cascade_output.id_ref;
-			dq_iq_reference = cascade_output.iq_ref;
-			dq_ud_command = cascade_output.ud_cmd;
-			dq_uq_command = cascade_output.uq_cmd;
-			dq_current_ref_limited =
-				cascade_output.current_ref_limited;
-			dq_voltage_limited = cascade_output.voltage_limited;
-		}
-#endif
-
-		/* 限制电压矢量幅值，使调制矢量落在SVPWM 5%~95%占空比线性区间内 */
-		float vector_magnitude_sq = dq_ud_command * dq_ud_command
-								+ dq_uq_command * dq_uq_command;
-		float vector_limit = DQ_VOLTAGE_UTILIZATION * dq_vdc_feedback
-						 * DQ_INV_SQRT_THREE;
-		float vector_limit_sq = vector_limit * vector_limit;
-		// 矢量幅值超出最大限制时做归一化缩放
-		if (vector_magnitude_sq > vector_limit_sq)
-		{
-			float vector_scale = vector_limit / sqrtf(vector_magnitude_sq);
-			dq_ud_command *= vector_scale;
-			dq_uq_command *= vector_scale;
-			dq_voltage_limited = 1U;
-		}
-
-		/* Inverse Park and inverse Clarke create the three phase commands. */
-		float u_alpha = dq_ud_command * cos_theta
-		                - dq_uq_command * sin_theta;
-		float u_beta = dq_ud_command * sin_theta
-		               + dq_uq_command * cos_theta;
-
-		float ua = u_alpha;
-		float ub = -0.5f * u_alpha + 0.8660254f * u_beta;
-		float uc = -0.5f * u_alpha - 0.8660254f * u_beta;
-
-		/* Min-max common-mode injection implements SVPWM. */
-		float u_max = fmaxf(ua, fmaxf(ub, uc));
-		float u_min = fminf(ua, fminf(ub, uc));
-		float u_zero = -0.5f * (u_max + u_min);
-
-		float ua_svpwm = ua + u_zero;
-		float ub_svpwm = ub + u_zero;
-		float uc_svpwm = uc + u_zero;
-
-		/* Convert phase commands in volts to normalized timer duties. */
-		float duty_a = 0.5f + ua_svpwm / dq_vdc_feedback;
-		float duty_b = 0.5f + ub_svpwm / dq_vdc_feedback;
-		float duty_c = 0.5f + uc_svpwm / dq_vdc_feedback;
-
-		duty_a = fminf(fmaxf(duty_a, 0.05f), 0.95f);
-		duty_b = fminf(fmaxf(duty_b, 0.05f), 0.95f);
-		duty_c = fminf(fmaxf(duty_c, 0.05f), 0.95f);
-
-		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1,
-		                          (uint32_t)(duty_a * 8400.0f));
-		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
-		                          (uint32_t)(duty_b * 8400.0f));
-		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3,
-		                          (uint32_t)(duty_c * 8400.0f));
 			count++;
 
      if(count>=2000)
@@ -871,18 +442,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
        count=0;
      }
   }
-	if(htim->Instance == TIM13)  
-  {
-		
+
 //		// *** 归一化 ***
 //		float normalized_target = target_v / MAX_VOLTAGE;   // 注意：target要先用pid_set_target设置原始值
 //		float normalized_current = Voltage_Rms_2 / MAX_VOLTAGE;		
 //		pid_set_target(&PID_Voltage, normalized_target);		
 //		float pid_out_normalized = pid_calculate_positional(&PID_Voltage, normalized_current);		
 //		PID_OUT_V = pid_out_normalized * MAX_MODULATION;
-		
-	}
-	
 }
 	
 

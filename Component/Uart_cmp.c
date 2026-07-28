@@ -46,9 +46,6 @@ int my_printf(UART_HandleTypeDef *huart, const char *format, ...)
     return len;
 }
 
-extern SOGI_PLL_T Grid_PLL;
-extern PR_T PR_Current;
-
 // name=value command table, single-pass parse (see uart_proc below)
 typedef struct
 {
@@ -56,74 +53,44 @@ typedef struct
     void (*handler)(float val);
 } uart_cmd_t;
 
-static void cmd_kp(float v)
-{
-    pll_loopfilter_set_kpki(&Grid_PLL.loopfilter, v, Grid_PLL.loopfilter.Ki);
-    my_printf(&huart1, "kp=%.4f ki=%.4f\r\n", Grid_PLL.loopfilter.Kp, Grid_PLL.loopfilter.Ki);
-}
-
-static void cmd_ki(float v)
-{
-    pll_loopfilter_set_kpki(&Grid_PLL.loopfilter, Grid_PLL.loopfilter.Kp, v);
-    my_printf(&huart1, "kp=%.4f ki=%.4f\r\n", Grid_PLL.loopfilter.Kp, Grid_PLL.loopfilter.Ki);
-}
-
-static void cmd_prp(float v)
-{
-    PR_Current.Kp = v;
-    my_printf(&huart1, "PR: Kp=%.4f Kr=%.4f wc=%.4f\r\n",
-              PR_Current.Kp, PR_Current.Kr, PR_Current.OMEGA_C);
-}
-
-static void cmd_prr(float v)
-{
-    PR_Current.Kr = v;
-    __disable_irq();
-    PR_Precompute(&PR_Current);
-    __enable_irq();
-    my_printf(&huart1, "PR: Kp=%.4f Kr=%.4f wc=%.4f\r\n",
-              PR_Current.Kp, PR_Current.Kr, PR_Current.OMEGA_C);
-}
-
-static void cmd_prwc(float v)
-{
-    PR_Current.OMEGA_C = v;
-    __disable_irq();
-    PR_Precompute(&PR_Current);
-    __enable_irq();
-    my_printf(&huart1, "PR: Kp=%.4f Kr=%.4f wc=%.4f\r\n",
-              PR_Current.Kp, PR_Current.Kr, PR_Current.OMEGA_C);
-}
-
 static void cmd_vp(float v)
 {
-    Inverter_SetVoltageKp(v);
+    InverterStatus status;
+
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KP, v);
+    Inverter_GetStatus(&status);
     my_printf(&huart1, "DQ_Voltage: kp=%.4f ki=%.4f\r\n",
-              Inverter_GetVoltageKp(), Inverter_GetVoltageKi());
+              status.config.voltage_kp, status.config.voltage_ki);
 }
 
 static void cmd_vi(float v)
 {
-    Inverter_SetVoltageKi(v);
+    InverterStatus status;
+
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KI, v);
+    Inverter_GetStatus(&status);
     my_printf(&huart1, "DQ_Voltage: kp=%.4f ki=%.4f\r\n",
-              Inverter_GetVoltageKp(), Inverter_GetVoltageKi());
+              status.config.voltage_kp, status.config.voltage_ki);
 }
 
 static void cmd_vref(float v)
 {
+    InverterStatus status;
+
     /* The user-facing reference is line-to-line RMS voltage. */
-    Inverter_SetLineVoltageRef(v);
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VLL_REF_RMS, v);
+    Inverter_GetStatus(&status);
     my_printf(&huart1, "vref=%.3f Vrms line-to-line\r\n",
-              Inverter_GetLineVoltageRef());
+              status.config.vll_ref_rms);
 }
 
 static void cmd_vstat(float v)
 {
-    InverterVoltageStatus status;
+    InverterStatus status;
     float vll_feedback_rms;
 
     (void)v;
-    Inverter_GetVoltageStatus(&status);
+    Inverter_GetStatus(&status);
     /* Keep this diagnostic sqrtf outside the 20 kHz control ISR. */
     vll_feedback_rms = sqrtf(status.vd * status.vd + status.vq * status.vq)
                        * 1.224744871f;
@@ -131,22 +98,25 @@ static void cmd_vstat(float v)
     my_printf(&huart1,
               "vll_ref=%.3f vd_ref=%.3f vd=%.3f vq=%.3f "
               "vll_fb=%.3f ud=%.3f uq=%.3f kp=%.4f ki=%.4f\r\n",
-              status.vll_ref_rms, status.vd_ref, status.vd, status.vq,
-              vll_feedback_rms, status.ud_cmd, status.uq_cmd,
-              status.kp, status.ki);
+              status.config.vll_ref_rms, status.vd_ref, status.vd, status.vq,
+              vll_feedback_rms, status.ud, status.uq,
+              status.config.voltage_kp, status.config.voltage_ki);
 }
 
 static void print_cascade_gains(void)
 {
+    InverterStatus status;
+
+    Inverter_GetStatus(&status);
     my_printf(&huart1,
               "DQ_Cascade: ovp=%.4f ovi=%.4f icp=%.4f ici=%.4f\r\n",
-              Inverter_GetOuterKp(), Inverter_GetOuterKi(),
-              Inverter_GetCurrentKp(), Inverter_GetCurrentKi());
+              status.config.outer_kp, status.config.outer_ki,
+              status.config.current_kp, status.config.current_ki);
 }
 
-static void report_cascade_set_result(uint8_t accepted)
+static void report_cascade_set_result(bool accepted)
 {
-    if (accepted != 0U)
+    if (accepted)
     {
         print_cascade_gains();
     }
@@ -162,41 +132,46 @@ static void report_cascade_set_result(uint8_t accepted)
 
 static void cmd_ovp(float v)
 {
-    report_cascade_set_result(Inverter_SetOuterKp(v));
+    report_cascade_set_result(
+        Inverter_SetParameter(INVERTER_PARAMETER_OUTER_KP, v));
 }
 
 static void cmd_ovi(float v)
 {
-    report_cascade_set_result(Inverter_SetOuterKi(v));
+    report_cascade_set_result(
+        Inverter_SetParameter(INVERTER_PARAMETER_OUTER_KI, v));
 }
 
 static void cmd_icp(float v)
 {
-    report_cascade_set_result(Inverter_SetCurrentKp(v));
+    report_cascade_set_result(
+        Inverter_SetParameter(INVERTER_PARAMETER_CURRENT_KP, v));
 }
 
 static void cmd_ici(float v)
 {
-    report_cascade_set_result(Inverter_SetCurrentKi(v));
+    report_cascade_set_result(
+        Inverter_SetParameter(INVERTER_PARAMETER_CURRENT_KI, v));
 }
 
 static void cmd_dqstat(float v)
 {
-    InverterDqStatus status;
+    InverterStatus status;
 
     (void)v;
-    Inverter_GetDqStatus(&status);
+    Inverter_GetStatus(&status);
     my_printf(&huart1,
               "mode=%u vdc=%.2f vd_ref=%.2f vd=%.2f vq=%.2f "
               "id_ref=%.2f id=%.2f iq_ref=%.2f iq=%.2f "
               "ud=%.2f uq=%.2f ovp=%.4f ovi=%.4f "
               "icp=%.4f ici=%.4f current_ref_limited=%u "
               "voltage_limited=%u\r\n",
-              status.mode, status.vdc, status.vd_ref, status.vd, status.vq,
+              status.mode, status.config.vdc,
+              status.vd_ref, status.vd, status.vq,
               status.id_ref, status.id, status.iq_ref, status.iq,
-              status.ud_cmd, status.uq_cmd,
-              status.outer_kp, status.outer_ki,
-              status.current_kp, status.current_ki,
+              status.ud, status.uq,
+              status.config.outer_kp, status.config.outer_ki,
+              status.config.current_kp, status.config.current_ki,
               status.current_ref_limited, status.voltage_limited);
 }
 
@@ -218,11 +193,6 @@ static void cmd_clrfault(float v)
 
 static const uart_cmd_t uart_cmds[] =
 {
-    {"kp", cmd_kp},
-    {"ki", cmd_ki},
-    {"prp", cmd_prp},
-    {"prr", cmd_prr},
-    {"prwc", cmd_prwc},
     {"vp", cmd_vp},
     {"vi", cmd_vi},
     {"vref", cmd_vref},

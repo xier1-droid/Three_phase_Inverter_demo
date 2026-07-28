@@ -2,39 +2,20 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <string.h>
 
 #define DQ_OUTER_DIVIDER_RELOAD       3U
+#define DQ_PI_CORRECTION_LIMIT_V      3.0f
+#define DQ_SAMPLE_HALF_STEP_COS       0.999969157f
+#define DQ_SAMPLE_HALF_STEP_SIN       0.007853901f
+#define DQ_ELECTRICAL_OMEGA_RAD_S     314.1592654f
 
-typedef struct
-{
-    float integral;
-} DqPiState;
-
-static DqPiState outer_d_pi;
-static DqPiState outer_q_pi;
-static DqPiState current_d_pi;
-static DqPiState current_q_pi;
-
-static volatile float outer_kp; // 外环比例增益
-static volatile float outer_ki; // 外环积分增益（已包含Ts离散步长，无需外部乘周期）
-static volatile float current_kp; // 内环比例增益
-static volatile float current_ki; // 内环积分增益
-
-static float held_id_ref;//缓存外环输出电流指令
-static float held_iq_ref;
-static float voltage_excess_d;//电压矢量饱和余量
-static float voltage_excess_q;
-static uint8_t outer_divider;//外环分频器，3 个电流周期执行一次电压环
-static uint8_t held_current_ref_limited;//外环电流指令矢量是否饱和标志
-static uint8_t previous_voltage_limited;//上一周期电压是否饱和，用于抗饱和积分冻结判定
-static DqCascadeStatus latest_status;//完整控制环状态快照
-
-static float DqVectorMagnitudeSquared(float d, float q)//计算 dq 矢量模平方
+static float DqVectorMagnitudeSquared(float d, float q)
 {
     return d * d + q * q;
 }
 
-static uint8_t DqLimitVector(float *d, float *q, float limit)//矢量等比例限幅
+static uint8_t DqLimitVector(float *d, float *q, float limit)
 {
     float magnitude_squared;
     float limit_squared;
@@ -59,18 +40,59 @@ static uint8_t DqLimitVector(float *d, float *q, float limit)//矢量等比例限幅
     return 0U;
 }
 
-static void DqUpdateOuterLoop(const DqCascadeInput *input)
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
+static float DqVoltagePiUpdate(DqPiState *pi,
+                               float error,
+                               float kp,
+                               float ki)
 {
-    float error_d = input->vd_ref - input->vd;
-    float error_q = input->vq_ref - input->vq;
-    float candidate_integral_d = outer_d_pi.integral
-                                 + outer_ki * outer_kp * error_d;
-    float candidate_integral_q = outer_q_pi.integral
-                                 + outer_ki * outer_kp * error_q;
-    float candidate_d = outer_kp * error_d + candidate_integral_d;
-    float candidate_q = outer_kp * error_q + candidate_integral_q;
-    float old_d = outer_kp * error_d + outer_d_pi.integral;
-    float old_q = outer_kp * error_q + outer_q_pi.integral;
+    float integral_candidate = pi->integral + ki * kp * error;
+    float output = kp * error + integral_candidate;
+
+    if (output > DQ_PI_CORRECTION_LIMIT_V)
+    {
+        if (error < 0.0f)
+        {
+            pi->integral = integral_candidate;
+        }
+        return DQ_PI_CORRECTION_LIMIT_V;
+    }
+    if (output < -DQ_PI_CORRECTION_LIMIT_V)
+    {
+        if (error > 0.0f)
+        {
+            pi->integral = integral_candidate;
+        }
+        return -DQ_PI_CORRECTION_LIMIT_V;
+    }
+
+    pi->integral = integral_candidate;
+    return output;
+}
+#endif
+
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_CURRENT_LOOP
+static void DqUpdateOuterLoop(DqControl *control,
+                              float vd_ref,
+                              float vd,
+                              float vq)
+{
+    float error_d = vd_ref - vd;
+    float error_q = -vq;
+    float candidate_integral_d = control->outer_d_pi.integral
+                                 + control->config.outer_ki
+                                   * control->config.outer_kp * error_d;
+    float candidate_integral_q = control->outer_q_pi.integral
+                                 + control->config.outer_ki
+                                   * control->config.outer_kp * error_q;
+    float candidate_d = control->config.outer_kp * error_d
+                        + candidate_integral_d;
+    float candidate_q = control->config.outer_kp * error_q
+                        + candidate_integral_q;
+    float old_d = control->config.outer_kp * error_d
+                  + control->outer_d_pi.integral;
+    float old_q = control->config.outer_kp * error_q
+                  + control->outer_q_pi.integral;
     float limited_candidate_d = candidate_d;
     float limited_candidate_q = candidate_q;
     float limited_old_d = old_d;
@@ -83,8 +105,8 @@ static void DqUpdateOuterLoop(const DqCascadeInput *input)
     uint8_t old_limited;
     uint8_t allow_integration;
 
-    candidate_magnitude_squared = DqVectorMagnitudeSquared(candidate_d,
-                                                            candidate_q);
+    candidate_magnitude_squared =
+        DqVectorMagnitudeSquared(candidate_d, candidate_q);
     old_magnitude_squared = DqVectorMagnitudeSquared(old_d, old_q);
     candidate_limited = DqLimitVector(&limited_candidate_d,
                                       &limited_candidate_q,
@@ -96,50 +118,56 @@ static void DqUpdateOuterLoop(const DqCascadeInput *input)
     allow_integration = (uint8_t)((candidate_limited == 0U) ||
                         (candidate_magnitude_squared < old_magnitude_squared));
 
-    integration_step_d = candidate_integral_d - outer_d_pi.integral;
-    integration_step_q = candidate_integral_q - outer_q_pi.integral;
-    if ((previous_voltage_limited != 0U) &&
-        ((integration_step_d * voltage_excess_d +
-          integration_step_q * voltage_excess_q) >= 0.0f))
+    integration_step_d = candidate_integral_d
+                         - control->outer_d_pi.integral;
+    integration_step_q = candidate_integral_q
+                         - control->outer_q_pi.integral;
+    if ((control->previous_voltage_limited != 0U) &&
+        ((integration_step_d * control->voltage_excess_d +
+          integration_step_q * control->voltage_excess_q) >= 0.0f))
     {
         allow_integration = 0U;
     }
 
     if (allow_integration != 0U)
     {
-        outer_d_pi.integral = candidate_integral_d;
-        outer_q_pi.integral = candidate_integral_q;
-        held_id_ref = limited_candidate_d;
-        held_iq_ref = limited_candidate_q;
-        held_current_ref_limited = candidate_limited;
+        control->outer_d_pi.integral = candidate_integral_d;
+        control->outer_q_pi.integral = candidate_integral_q;
+        control->held_id_ref = limited_candidate_d;
+        control->held_iq_ref = limited_candidate_q;
+        control->current_ref_limited = candidate_limited;
     }
     else
     {
-        held_id_ref = limited_old_d;
-        held_iq_ref = limited_old_q;
-        held_current_ref_limited = old_limited;
+        control->held_id_ref = limited_old_d;
+        control->held_iq_ref = limited_old_q;
+        control->current_ref_limited = old_limited;
     }
 }
 
-static void DqUpdateCurrentLoop(const DqCascadeInput *input,
-                                DqCascadeOutput *output)
+static void DqUpdateCurrentLoop(DqControl *control,
+                                float vd,
+                                float vq,
+                                float id,
+                                float iq,
+                                DqControlOutput *output)
 {
-    float error_d = held_id_ref - input->id;
-    float error_q = held_iq_ref - input->iq;
-		//候选积分项（新积分）
-    float candidate_integral_d = current_d_pi.integral
-                                 + current_ki * current_kp * error_d;
-    float candidate_integral_q = current_q_pi.integral
-                                 + current_ki * current_kp * error_q;
-		//候选输出（使用新积分）
-    float candidate_correction_d = current_kp * error_d
+    float error_d = control->held_id_ref - id;
+    float error_q = control->held_iq_ref - iq;
+    float candidate_integral_d = control->current_d_pi.integral
+                                 + control->config.current_ki
+                                   * control->config.current_kp * error_d;
+    float candidate_integral_q = control->current_q_pi.integral
+                                 + control->config.current_ki
+                                   * control->config.current_kp * error_q;
+    float candidate_correction_d = control->config.current_kp * error_d
                                    + candidate_integral_d;
-    float candidate_correction_q = current_kp * error_q
+    float candidate_correction_q = control->config.current_kp * error_q
                                    + candidate_integral_q;
-		// 旧输出（沿用上次积分，饱和时备用）
-    float old_correction_d = current_kp * error_d + current_d_pi.integral;
-    float old_correction_q = current_kp * error_q + current_q_pi.integral;
-		
+    float old_correction_d = control->config.current_kp * error_d
+                             + control->current_d_pi.integral;
+    float old_correction_q = control->config.current_kp * error_q
+                             + control->current_q_pi.integral;
     float candidate_correction_raw_squared;
     float old_correction_raw_squared;
     float candidate_ud;
@@ -156,41 +184,35 @@ static void DqUpdateCurrentLoop(const DqCascadeInput *input,
     float decoupling_q;
     float vector_limit;
     uint8_t candidate_correction_limited;
-    uint8_t old_correction_limited;
     uint8_t candidate_voltage_limited;
     uint8_t old_voltage_limited;
     uint8_t allow_integration;
 
-		//候选输出、旧输出分别做电流矢量限幅
     candidate_correction_raw_squared =
         DqVectorMagnitudeSquared(candidate_correction_d,
                                  candidate_correction_q);
-    old_correction_raw_squared = DqVectorMagnitudeSquared(old_correction_d,
-                                                           old_correction_q);
+    old_correction_raw_squared =
+        DqVectorMagnitudeSquared(old_correction_d, old_correction_q);
     candidate_correction_limited =
         DqLimitVector(&candidate_correction_d,
                       &candidate_correction_q,
                       DQ_CURRENT_CORRECTION_LIMIT_V);
-    old_correction_limited = DqLimitVector(&old_correction_d,
-                                            &old_correction_q,
-                                            DQ_CURRENT_CORRECTION_LIMIT_V);
-		
-		// dq 交叉耦合前馈解耦
-    decoupling_d = -input->omega_rad_s * DQ_FILTER_L_H * input->iq;
-    decoupling_q = input->omega_rad_s * DQ_FILTER_L_H * input->id;
-		
-		//输出电压合成
-    candidate_ud = input->vd + candidate_correction_d + decoupling_d;
-    candidate_uq = input->vq + candidate_correction_q + decoupling_q;
-    old_ud = input->vd + old_correction_d + decoupling_d;
-    old_uq = input->vq + old_correction_q + decoupling_q;
-		
-		//SVPWM 最大电压矢量限幅
-    candidate_voltage_raw_squared = DqVectorMagnitudeSquared(candidate_ud,
-                                                              candidate_uq);
+    (void)DqLimitVector(&old_correction_d,
+                        &old_correction_q,
+                        DQ_CURRENT_CORRECTION_LIMIT_V);
+
+    decoupling_d = -DQ_ELECTRICAL_OMEGA_RAD_S * DQ_FILTER_L_H * iq;
+    decoupling_q = DQ_ELECTRICAL_OMEGA_RAD_S * DQ_FILTER_L_H * id;
+
+    candidate_ud = vd + candidate_correction_d + decoupling_d;
+    candidate_uq = vq + candidate_correction_q + decoupling_q;
+    old_ud = vd + old_correction_d + decoupling_d;
+    old_uq = vq + old_correction_q + decoupling_q;
+    candidate_voltage_raw_squared =
+        DqVectorMagnitudeSquared(candidate_ud, candidate_uq);
     old_voltage_raw_squared = DqVectorMagnitudeSquared(old_ud, old_uq);
 
-    vector_limit = DQ_VOLTAGE_UTILIZATION * input->vdc
+    vector_limit = DQ_VOLTAGE_UTILIZATION * control->config.vdc
                    * DQ_INV_SQRT_THREE;
     limited_candidate_ud = candidate_ud;
     limited_candidate_uq = candidate_uq;
@@ -212,160 +234,144 @@ static void DqUpdateCurrentLoop(const DqCascadeInput *input,
 
     if (allow_integration != 0U)
     {
-        current_d_pi.integral = candidate_integral_d;
-        current_q_pi.integral = candidate_integral_q;
-        output->ud_cmd = limited_candidate_ud;
-        output->uq_cmd = limited_candidate_uq;
-        output->current_correction_limited = candidate_correction_limited;
+        control->current_d_pi.integral = candidate_integral_d;
+        control->current_q_pi.integral = candidate_integral_q;
+        output->ud = limited_candidate_ud;
+        output->uq = limited_candidate_uq;
         output->voltage_limited = candidate_voltage_limited;
-        voltage_excess_d = candidate_ud - limited_candidate_ud;
-        voltage_excess_q = candidate_uq - limited_candidate_uq;
+        control->voltage_excess_d = candidate_ud - limited_candidate_ud;
+        control->voltage_excess_q = candidate_uq - limited_candidate_uq;
     }
     else
     {
-        output->ud_cmd = limited_old_ud;
-        output->uq_cmd = limited_old_uq;
-        output->current_correction_limited = old_correction_limited;
+        output->ud = limited_old_ud;
+        output->uq = limited_old_uq;
         output->voltage_limited = old_voltage_limited;
-        voltage_excess_d = old_ud - limited_old_ud;
-        voltage_excess_q = old_uq - limited_old_uq;
+        control->voltage_excess_d = old_ud - limited_old_ud;
+        control->voltage_excess_q = old_uq - limited_old_uq;
     }
 
-    previous_voltage_limited = output->voltage_limited;
+    control->previous_voltage_limited = output->voltage_limited;
 }
+#endif
 
-void DqCascade_Reset(void)
+void DqControl_Init(DqControl *control,
+                    const InverterConfig *config)
 {
-    outer_d_pi.integral = 0.0f;
-    outer_q_pi.integral = 0.0f;
-    current_d_pi.integral = 0.0f;
-    current_q_pi.integral = 0.0f;
-    held_id_ref = 0.0f;
-    held_iq_ref = 0.0f;
-    voltage_excess_d = 0.0f;
-    voltage_excess_q = 0.0f;
-    outer_divider = 0U;
-    held_current_ref_limited = 0U;
-    previous_voltage_limited = 0U;
-
-    latest_status.vdc = 0.0f;
-    latest_status.vd_ref = 0.0f;
-    latest_status.vd = 0.0f;
-    latest_status.vq = 0.0f;
-    latest_status.id_ref = 0.0f;
-    latest_status.id = 0.0f;
-    latest_status.iq_ref = 0.0f;
-    latest_status.iq = 0.0f;
-    latest_status.ud_cmd = 0.0f;
-    latest_status.uq_cmd = 0.0f;
-    latest_status.outer_kp = outer_kp;
-    latest_status.outer_ki = outer_ki;
-    latest_status.current_kp = current_kp;
-    latest_status.current_ki = current_ki;
-    latest_status.current_ref_limited = 0U;
-    latest_status.current_correction_limited = 0U;
-    latest_status.voltage_limited = 0U;
-}
-
-void DqCascade_Step(const DqCascadeInput *input,
-                    DqCascadeOutput *output)
-{
-    if ((input == NULL) || (output == NULL))
+    if (control == NULL)
     {
         return;
     }
 
-    if (outer_divider == 0U)
+    memset(control, 0, sizeof(*control));
+    if (config != NULL)
     {
-        DqUpdateOuterLoop(input);
-        outer_divider = DQ_OUTER_DIVIDER_RELOAD;
+        control->config = *config;
+    }
+}
+
+void DqControl_Reset(DqControl *control)
+{
+    InverterConfig config;
+
+    if (control == NULL)
+    {
+        return;
+    }
+
+    config = control->config;
+    memset(control, 0, sizeof(*control));
+    control->config = config;
+}
+
+void DqControl_SetConfig(DqControl *control,
+                         const InverterConfig *config)
+{
+    if ((control != NULL) && (config != NULL))
+    {
+        control->config = *config;
+    }
+}
+
+void DqControl_Step(DqControl *control,
+                    const DqControlInput *input,
+                    DqControlOutput *output)
+{
+    float sin_sample;
+    float cos_sample;
+    float v_alpha;
+    float v_beta;
+    float i_alpha;
+    float i_beta;
+
+    if ((control == NULL) || (input == NULL) || (output == NULL))
+    {
+        return;
+    }
+
+    sin_sample = input->sin_theta;
+    cos_sample = input->cos_theta;
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_CURRENT_LOOP
+    sin_sample = input->sin_theta * DQ_SAMPLE_HALF_STEP_COS
+                 - input->cos_theta * DQ_SAMPLE_HALF_STEP_SIN;
+    cos_sample = input->cos_theta * DQ_SAMPLE_HALF_STEP_COS
+                 + input->sin_theta * DQ_SAMPLE_HALF_STEP_SIN;
+#endif
+
+    v_alpha = input->u_u;
+    v_beta = input->u_vw * DQ_INV_SQRT_THREE;
+    i_alpha = input->iu;
+    i_beta = (input->iv - input->iw) * DQ_INV_SQRT_THREE;
+
+    output->vd = v_alpha * cos_sample + v_beta * sin_sample;
+    output->vq = -v_alpha * sin_sample + v_beta * cos_sample;
+    output->id = i_alpha * cos_sample + i_beta * sin_sample;
+    output->iq = -i_alpha * sin_sample + i_beta * cos_sample;
+    output->id_ref = 0.0f;
+    output->iq_ref = 0.0f;
+    output->current_ref_limited = 0U;
+    output->voltage_limited = 0U;
+
+#if DQ_CONTROL_MODE == DQ_OPEN_LOOP
+    output->ud = input->vd_ref;
+    output->uq = 0.0f;
+#elif DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
+    output->ud = input->vd_ref
+                 + DqVoltagePiUpdate(&control->voltage_d_pi,
+                                     input->vd_ref - output->vd,
+                                     control->config.voltage_kp,
+                                     control->config.voltage_ki);
+    output->uq = DqVoltagePiUpdate(&control->voltage_q_pi,
+                                   -output->vq,
+                                   control->config.voltage_kp,
+                                   control->config.voltage_ki);
+#else
+    if (control->outer_divider == 0U)
+    {
+        DqUpdateOuterLoop(control, input->vd_ref, output->vd, output->vq);
+        control->outer_divider = DQ_OUTER_DIVIDER_RELOAD;
     }
     else
     {
-        outer_divider--;
+        control->outer_divider--;
     }
 
-    output->id_ref = held_id_ref;
-    output->iq_ref = held_iq_ref;
-    output->current_ref_limited = held_current_ref_limited;
-    DqUpdateCurrentLoop(input, output);
+    output->id_ref = control->held_id_ref;
+    output->iq_ref = control->held_iq_ref;
+    output->current_ref_limited = control->current_ref_limited;
+    DqUpdateCurrentLoop(control,
+                        output->vd,
+                        output->vq,
+                        output->id,
+                        output->iq,
+                        output);
+#endif
 
-    latest_status.vdc = input->vdc;
-    latest_status.vd_ref = input->vd_ref;
-    latest_status.vd = input->vd;
-    latest_status.vq = input->vq;
-    latest_status.id_ref = output->id_ref;
-    latest_status.id = input->id;
-    latest_status.iq_ref = output->iq_ref;
-    latest_status.iq = input->iq;
-    latest_status.ud_cmd = output->ud_cmd;
-    latest_status.uq_cmd = output->uq_cmd;
-    latest_status.outer_kp = outer_kp;
-    latest_status.outer_ki = outer_ki;
-    latest_status.current_kp = current_kp;
-    latest_status.current_ki = current_ki;
-    latest_status.current_ref_limited = output->current_ref_limited;
-    latest_status.current_correction_limited =
-        output->current_correction_limited;
-    latest_status.voltage_limited = output->voltage_limited;
-}
-
-void DqCascade_SetOuterKp(float value)
-{
-    if ((value >= 0.0f) && (value <= DQ_OUTER_KP_MAX))
-    {
-        outer_kp = value;
-    }
-}
-
-void DqCascade_SetOuterKi(float value)
-{
-    if ((value >= 0.0f) && (value <= DQ_OUTER_KI_MAX))
-    {
-        outer_ki = value;
-    }
-}
-
-void DqCascade_SetCurrentKp(float value)
-{
-    if ((value >= 0.0f) && (value <= DQ_CURRENT_KP_MAX))
-    {
-        current_kp = value;
-    }
-}
-
-void DqCascade_SetCurrentKi(float value)
-{
-    if ((value >= 0.0f) && (value <= DQ_CURRENT_KI_MAX))
-    {
-        current_ki = value;
-    }
-}
-
-float DqCascade_GetOuterKp(void)
-{
-    return outer_kp;
-}
-
-float DqCascade_GetOuterKi(void)
-{
-    return outer_ki;
-}
-
-float DqCascade_GetCurrentKp(void)
-{
-    return current_kp;
-}
-
-float DqCascade_GetCurrentKi(void)
-{
-    return current_ki;
-}
-
-void DqCascade_GetStatus(DqCascadeStatus *status)
-{
-    if (status != NULL)
-    {
-        *status = latest_status;
-    }
+#if DQ_CONTROL_MODE != DQ_VOLTAGE_CURRENT_LOOP
+    output->voltage_limited = DqLimitVector(
+        &output->ud,
+        &output->uq,
+        DQ_VOLTAGE_UTILIZATION * control->config.vdc
+        * DQ_INV_SQRT_THREE);
+#endif
 }

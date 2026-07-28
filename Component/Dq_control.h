@@ -22,68 +22,82 @@
 #define DQ_CURRENT_REF_LIMIT_A            3.5f
 #define DQ_CURRENT_CORRECTION_LIMIT_V     10.0f
 #define DQ_VOLTAGE_UTILIZATION            0.9f
+#define DQ_VOLTAGE_KP_MAX                 2.0f
+#define DQ_VOLTAGE_KI_MAX                 500.0f
 #define DQ_OUTER_KP_MAX                   2.0f
 #define DQ_OUTER_KI_MAX                   2.0f
 #define DQ_CURRENT_KP_MAX                 20.0f
 #define DQ_CURRENT_KI_MAX                 2.0f
+#define DQ_LINE_VOLTAGE_REF_MAX_V         32.0f
 
 typedef struct
 {
-    float vd_ref;
-    float vq_ref;
-    float vd;
-    float vq;
-    float id;
-    float iq;
-    float vdc;
-    float omega_rad_s;
-} DqCascadeInput;
-
-typedef struct
-{
-    float id_ref;
-    float iq_ref;
-    float ud_cmd;
-    float uq_cmd;
-    uint8_t current_ref_limited;
-    uint8_t current_correction_limited;
-    uint8_t voltage_limited;
-} DqCascadeOutput;
-
-typedef struct
-{
-    float vdc;
-    float vd_ref;
-    float vd;
-    float vq;
-    float id_ref;
-    float id;
-    float iq_ref;
-    float iq;
-    float ud_cmd;
-    float uq_cmd;
+    float vll_ref_rms;
+    float voltage_kp;
+    float voltage_ki;
     float outer_kp;
     float outer_ki;
     float current_kp;
     float current_ki;
+    float vdc;
+} InverterConfig;
+
+typedef struct
+{
+    float integral;
+} DqPiState;
+
+typedef struct
+{
+    InverterConfig config;
+    DqPiState voltage_d_pi;
+    DqPiState voltage_q_pi;
+    DqPiState outer_d_pi;
+    DqPiState outer_q_pi;
+    DqPiState current_d_pi;
+    DqPiState current_q_pi;
+    float held_id_ref;
+    float held_iq_ref;
+    float voltage_excess_d;
+    float voltage_excess_q;
+    uint8_t outer_divider;
     uint8_t current_ref_limited;
-    uint8_t current_correction_limited;
+    uint8_t previous_voltage_limited;
+} DqControl;
+
+typedef struct
+{
+    float vd_ref;
+    float u_u;
+    float u_vw;
+    float iu;
+    float iv;
+    float iw;
+    float sin_theta;
+    float cos_theta;
+} DqControlInput;
+
+typedef struct
+{
+    float vd;
+    float vq;
+    float id_ref;
+    float id;
+    float iq_ref;
+    float iq;
+    float ud;
+    float uq;
+    uint8_t current_ref_limited;
     uint8_t voltage_limited;
-} DqCascadeStatus;
+} DqControlOutput;
 
-void DqCascade_Reset(void);
-void DqCascade_Step(const DqCascadeInput *input,
-                    DqCascadeOutput *output);
-
-void DqCascade_SetOuterKp(float value);
-void DqCascade_SetOuterKi(float value);
-void DqCascade_SetCurrentKp(float value);
-void DqCascade_SetCurrentKi(float value);
-
-float DqCascade_GetOuterKp(void);
-float DqCascade_GetOuterKi(void);
-float DqCascade_GetCurrentKp(void);
-float DqCascade_GetCurrentKi(void);
-void DqCascade_GetStatus(DqCascadeStatus *status);
+void DqControl_Init(DqControl *control,
+                    const InverterConfig *config);
+void DqControl_Reset(DqControl *control);
+void DqControl_SetConfig(DqControl *control,
+                         const InverterConfig *config);
+void DqControl_Step(DqControl *control,
+                    const DqControlInput *input,
+                    DqControlOutput *output);
 
 #endif
