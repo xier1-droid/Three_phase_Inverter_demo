@@ -219,7 +219,7 @@ int main(void)
   {
 		scheduler_run();
 //		printf("{i}%d\r\n	",i);
-//		printf("{Voltage_Get}%.2f\r\n	",Voltage_Get);
+//		printf("{Voltage_Get}:%.2f\r\n	",Voltage_Get);
 //		printf("{ADC_v_val}:%.2f\r\n",ADC_v_val);
 //		printf("{Voltage_val}:%.2f\r\n",Voltage_val);
 //		printf("{Voltage_Rms}:%.2f\r\n",Voltage_Rms);

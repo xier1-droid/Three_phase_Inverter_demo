@@ -136,6 +136,70 @@ static void cmd_vstat(float v)
               status.kp, status.ki);
 }
 
+static void print_cascade_gains(void)
+{
+    my_printf(&huart1,
+              "DQ_Cascade: ovp=%.4f ovi=%.4f icp=%.4f ici=%.4f\r\n",
+              Inverter_GetOuterKp(), Inverter_GetOuterKi(),
+              Inverter_GetCurrentKp(), Inverter_GetCurrentKi());
+}
+
+static void report_cascade_set_result(uint8_t accepted)
+{
+    if (accepted != 0U)
+    {
+        print_cascade_gains();
+    }
+    else if (wave_enable_tim8 != 0U)
+    {
+        my_printf(&huart1, "busy\r\n");
+    }
+    else
+    {
+        my_printf(&huart1, "invalid\r\n");
+    }
+}
+
+static void cmd_ovp(float v)
+{
+    report_cascade_set_result(Inverter_SetOuterKp(v));
+}
+
+static void cmd_ovi(float v)
+{
+    report_cascade_set_result(Inverter_SetOuterKi(v));
+}
+
+static void cmd_icp(float v)
+{
+    report_cascade_set_result(Inverter_SetCurrentKp(v));
+}
+
+static void cmd_ici(float v)
+{
+    report_cascade_set_result(Inverter_SetCurrentKi(v));
+}
+
+static void cmd_dqstat(float v)
+{
+    InverterDqStatus status;
+
+    (void)v;
+    Inverter_GetDqStatus(&status);
+    my_printf(&huart1,
+              "mode=%u vdc=%.2f vd_ref=%.2f vd=%.2f vq=%.2f "
+              "id_ref=%.2f id=%.2f iq_ref=%.2f iq=%.2f "
+              "ud=%.2f uq=%.2f ovp=%.4f ovi=%.4f "
+              "icp=%.4f ici=%.4f current_ref_limited=%u "
+              "voltage_limited=%u\r\n",
+              status.mode, status.vdc, status.vd_ref, status.vd, status.vq,
+              status.id_ref, status.id, status.iq_ref, status.iq,
+              status.ud_cmd, status.uq_cmd,
+              status.outer_kp, status.outer_ki,
+              status.current_kp, status.current_ki,
+              status.current_ref_limited, status.voltage_limited);
+}
+
 static void cmd_wave8(float v)
 {
     if (v != 0.0f)
@@ -163,6 +227,11 @@ static const uart_cmd_t uart_cmds[] =
     {"vi", cmd_vi},
     {"vref", cmd_vref},
     {"vstat", cmd_vstat},
+    {"ovp", cmd_ovp},
+    {"ovi", cmd_ovi},
+    {"icp", cmd_icp},
+    {"ici", cmd_ici},
+    {"dqstat", cmd_dqstat},
     {"wave8", cmd_wave8},
     {"clrfault", cmd_clrfault},
 };

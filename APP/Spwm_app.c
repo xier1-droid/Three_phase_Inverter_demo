@@ -209,31 +209,38 @@ volatile uint8_t wave_enable_tim8 = 0;   // 0=未发波（上电默认），1=已发波
 /* DQ voltage-loop constants. All voltage values are in volts. */
 #define DQ_CONTROL_TS_S               0.00005f
 #define DQ_SQRT_TWO_THIRDS            0.816496581f//sqrt（2/3）
-#define DQ_INV_SQRT_THREE             0.577350269f//sqrt（1/3）
 #define DQ_VDC_NOMINAL_V              60.0f
-#define DQ_VECTOR_LIMIT_V             31.1769145f//最大 DQ 电压矢量幅值
 #define DQ_PI_CORRECTION_LIMIT_V      3.0f
 #define DQ_VOLTAGE_KP_MAX             2.0f
 #define DQ_VOLTAGE_KI_MAX             500.0f
 #define DQ_LINE_VOLTAGE_REF_MAX_V     32.0f
 
 /* Each axis has its own integral state; Kp and Ki are shared. */
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
 typedef struct
 {
     float integral;
 } DqVoltagePi;
 
-/* UART and the TIM8 ISR share the volatile parameters and status values. */
 static DqVoltagePi dq_vd_pi = {0.0f};
 static DqVoltagePi dq_vq_pi = {0.0f};
-volatile float dq_voltage_kp = 0.045f;//0.075
+#endif
+/* UART and the TIM8 ISR share the volatile parameters and status values. */
+volatile float dq_voltage_kp = 0.035f;//0.045-0.006
 volatile float dq_voltage_ki = 0.006f;
-static volatile float dq_line_voltage_ref_rms = 30.3f;
+static volatile float dq_line_voltage_ref_rms = 30.6f;
 static volatile float dq_vd_reference = 0.0f;
 volatile float dq_vd_feedback = 0.0f;
 volatile float dq_vq_feedback = 0.0f;
 static volatile float dq_ud_command = 0.0f;
 static volatile float dq_uq_command = 0.0f;
+static volatile float dq_id_reference = 0.0f;
+static volatile float dq_iq_reference = 0.0f;
+static volatile float dq_id_feedback = 0.0f;
+static volatile float dq_iq_feedback = 0.0f;
+static volatile float dq_vdc_feedback = DQ_VDC_NOMINAL_V;
+static volatile uint8_t dq_current_ref_limited = 0U;
+static volatile uint8_t dq_voltage_limited = 0U;
 static volatile float v_alpha_feedback,v_beta_feedback;
 
 static float theta = 0.0f;          // 角度发生器状态
@@ -250,13 +257,23 @@ static uint8_t tim8_pwm_channels_started = 0;
 /* Clear dynamic state whenever PWM operation starts or stops. */
 static void DqVoltagePi_Reset(void)
 {
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
     dq_vd_pi.integral = 0.0f;
     dq_vq_pi.integral = 0.0f;
+#endif
     dq_vd_reference = 0.0f;
     dq_ud_command = 0.0f;
     dq_uq_command = 0.0f;
+    dq_id_reference = 0.0f;
+    dq_iq_reference = 0.0f;
+    dq_id_feedback = 0.0f;
+    dq_iq_feedback = 0.0f;
+    dq_current_ref_limited = 0U;
+    dq_voltage_limited = 0U;
+    DqCascade_Reset();
 }
 
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
 /*
  * 返回限幅约束后的逆变器电压校正量
  * 采用条件积分策略，抑制积分饱和，同时可实现积分退饱和
@@ -299,6 +316,7 @@ static float DqVoltagePi_Update(DqVoltagePi *pi, float error)
     pi->integral = integral_candidate;
     return output;
 }
+#endif
 
 /* Ordered bounds also reject NaN and infinite tuning values. */
 void Inverter_SetVoltageKp(float kp)
@@ -356,6 +374,108 @@ void Inverter_GetVoltageStatus(InverterVoltageStatus *status)
     status->uq_cmd = dq_uq_command;
     status->kp = dq_voltage_kp;
     status->ki = dq_voltage_ki;
+}
+
+uint8_t Inverter_SetOuterKp(float value)
+{
+    if ((wave_enable_tim8 != 0U) ||
+        !((value >= 0.0f) && (value <= DQ_OUTER_KP_MAX)))
+    {
+        return 0U;
+    }
+    DqCascade_SetOuterKp(value);
+    DqCascade_Reset();
+    return 1U;
+}
+
+uint8_t Inverter_SetOuterKi(float value)
+{
+    if ((wave_enable_tim8 != 0U) ||
+        !((value >= 0.0f) && (value <= DQ_OUTER_KI_MAX)))
+    {
+        return 0U;
+    }
+    DqCascade_SetOuterKi(value);
+    DqCascade_Reset();
+    return 1U;
+}
+
+uint8_t Inverter_SetCurrentKp(float value)
+{
+    if ((wave_enable_tim8 != 0U) ||
+        !((value >= 0.0f) && (value <= DQ_CURRENT_KP_MAX)))
+    {
+        return 0U;
+    }
+    DqCascade_SetCurrentKp(value);
+    DqCascade_Reset();
+    return 1U;
+}
+
+uint8_t Inverter_SetCurrentKi(float value)
+{
+    if ((wave_enable_tim8 != 0U) ||
+        !((value >= 0.0f) && (value <= DQ_CURRENT_KI_MAX)))
+    {
+        return 0U;
+    }
+    DqCascade_SetCurrentKi(value);
+    DqCascade_Reset();
+    return 1U;
+}
+
+float Inverter_GetOuterKp(void)
+{
+    return DqCascade_GetOuterKp();
+}
+
+float Inverter_GetOuterKi(void)
+{
+    return DqCascade_GetOuterKi();
+}
+
+float Inverter_GetCurrentKp(void)
+{
+    return DqCascade_GetCurrentKp();
+}
+
+float Inverter_GetCurrentKi(void)
+{
+    return DqCascade_GetCurrentKi();
+}
+
+void Inverter_GetDqStatus(InverterDqStatus *status)
+{
+    uint32_t primask;
+
+    if (status == NULL)
+    {
+        return;
+    }
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    status->mode = DQ_CONTROL_MODE;
+    status->vdc = dq_vdc_feedback;
+    status->vd_ref = dq_vd_reference;
+    status->vd = dq_vd_feedback;
+    status->vq = dq_vq_feedback;
+    status->id_ref = dq_id_reference;
+    status->id = dq_id_feedback;
+    status->iq_ref = dq_iq_reference;
+    status->iq = dq_iq_feedback;
+    status->ud_cmd = dq_ud_command;
+    status->uq_cmd = dq_uq_command;
+    status->outer_kp = DqCascade_GetOuterKp();
+    status->outer_ki = DqCascade_GetOuterKi();
+    status->current_kp = DqCascade_GetCurrentKp();
+    status->current_ki = DqCascade_GetCurrentKi();
+    status->current_ref_limited = dq_current_ref_limited;
+    status->voltage_limited = dq_voltage_limited;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
 }
 
 void Inverter_Wave_Start_TIM8(void)
@@ -490,6 +610,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		Current_val_2 = ADC_c_val_2 * 4.57f;//2000.0f)/(4.0f*100.0f);//0.37~0.5→4.121;0.8~1.0→4.39;2.07A-4.57
 		Voltage_val_2 = ((ADC_v_val_2 * ((39.0f / 2.0f) * 1000))/(4.0f*150.0f))*0.9324f;//32.0f				
 		
+		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((Current_val_2+3.0f)/6.0f)*4096));
+
 //		Voltage_Rms_2 = V_cal_rms(Voltage_val_2);//-0.11f-0.5f;//0.3f
 //		Voltage_Rms_Filtered = MovingAverage_Update(&voltage_filter,Voltage_Rms_2);		
 
@@ -580,6 +702,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 		float sin_theta = sinf(theta);
 		float cos_theta = cosf(theta);
+		float sin_sample = sin_theta;
+		float cos_sample = cos_theta;
+
+#if DQ_CONTROL_MODE == DQ_VOLTAGE_CURRENT_LOOP
+		/* Rotate back by half a control step to align with the ADC sample. */
+		sin_sample = sin_theta * 0.999969157f
+					 - cos_theta * 0.007853901f;
+		cos_sample = cos_theta * 0.999969157f
+					 + sin_theta * 0.007853901f;
+#endif
 
 		/* Ramp the reference to zero before disabling PWM outputs. */
 		if (stop_requested)
@@ -608,11 +740,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((v_alpha_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((v_beta_feedback+30.0f)/60.0f)*4096));
 		// Park变换，αβ→dq，得到d轴电压反馈
-		dq_vd_feedback = v_alpha_feedback * cos_theta
-					+ v_beta_feedback * sin_theta;
+		dq_vd_feedback = v_alpha_feedback * cos_sample
+					+ v_beta_feedback * sin_sample;
 		// q轴电压反馈
-		dq_vq_feedback = -v_alpha_feedback * sin_theta
-					+ v_beta_feedback * cos_theta;
+		dq_vq_feedback = -v_alpha_feedback * sin_sample
+					+ v_beta_feedback * cos_sample;
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((dq_vd_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((dq_vq_feedback+30.0f)/60.0f)*4096));
 		
@@ -623,6 +755,24 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 						* DQ_SQRT_TWO_THIRDS
 						* soft_start_ratio;
 
+		/* Transform measured phase currents into the synchronous frame. */
+		{
+			float i_alpha = Three_phase_I_u;
+			float i_beta = (Three_phase_I_v - Three_phase_I_w)
+							 * DQ_INV_SQRT_THREE;
+			dq_id_feedback = i_alpha * cos_sample + i_beta * sin_sample;
+			dq_iq_feedback = -i_alpha * sin_sample + i_beta * cos_sample;
+		}
+
+		dq_vdc_feedback = DQ_VDC_NOMINAL_V;
+#if DQ_CONTROL_MODE == DQ_OPEN_LOOP
+		dq_ud_command = dq_vd_reference;
+		dq_uq_command = 0.0f;
+		dq_id_reference = 0.0f;
+		dq_iq_reference = 0.0f;
+		dq_current_ref_limited = 0U;
+		dq_voltage_limited = 0U;
+#elif DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
 		/* 将限幅PI校正量叠加至前馈电压给定值 */
 		// d轴电压PI调节器，输入误差=给定d轴电压 - 反馈d轴电压
 		float ud_correction = DqVoltagePi_Update(
@@ -635,17 +785,48 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		dq_ud_command = dq_vd_reference + ud_correction;
 		// q轴指令电压仅使用PI校正输出，无直流前馈项
 		dq_uq_command = uq_correction;
+		dq_id_reference = 0.0f;
+		dq_iq_reference = 0.0f;
+		dq_current_ref_limited = 0U;
+		dq_voltage_limited = 0U;
+#else
+		{
+			DqCascadeInput cascade_input;
+			DqCascadeOutput cascade_output;
+
+			cascade_input.vd_ref = dq_vd_reference;
+			cascade_input.vq_ref = 0.0f;
+			cascade_input.vd = dq_vd_feedback;
+			cascade_input.vq = dq_vq_feedback;
+			cascade_input.id = dq_id_feedback;
+			cascade_input.iq = dq_iq_feedback;
+			cascade_input.vdc = dq_vdc_feedback;
+			cascade_input.omega_rad_s = 314.1592654f;
+			DqCascade_Step(&cascade_input, &cascade_output);
+
+			dq_id_reference = cascade_output.id_ref;
+			dq_iq_reference = cascade_output.iq_ref;
+			dq_ud_command = cascade_output.ud_cmd;
+			dq_uq_command = cascade_output.uq_cmd;
+			dq_current_ref_limited =
+				cascade_output.current_ref_limited;
+			dq_voltage_limited = cascade_output.voltage_limited;
+		}
+#endif
 
 		/* 限制电压矢量幅值，使调制矢量落在SVPWM 5%~95%占空比线性区间内 */
 		float vector_magnitude_sq = dq_ud_command * dq_ud_command
 								+ dq_uq_command * dq_uq_command;
-		float vector_limit_sq = DQ_VECTOR_LIMIT_V * DQ_VECTOR_LIMIT_V;
+		float vector_limit = DQ_VOLTAGE_UTILIZATION * dq_vdc_feedback
+						 * DQ_INV_SQRT_THREE;
+		float vector_limit_sq = vector_limit * vector_limit;
 		// 矢量幅值超出最大限制时做归一化缩放
 		if (vector_magnitude_sq > vector_limit_sq)
 		{
-			float vector_scale = DQ_VECTOR_LIMIT_V / sqrtf(vector_magnitude_sq);
+			float vector_scale = vector_limit / sqrtf(vector_magnitude_sq);
 			dq_ud_command *= vector_scale;
 			dq_uq_command *= vector_scale;
+			dq_voltage_limited = 1U;
 		}
 
 		/* Inverse Park and inverse Clarke create the three phase commands. */
@@ -668,9 +849,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float uc_svpwm = uc + u_zero;
 
 		/* Convert phase commands in volts to normalized timer duties. */
-		float duty_a = 0.5f + ua_svpwm / DQ_VDC_NOMINAL_V;
-		float duty_b = 0.5f + ub_svpwm / DQ_VDC_NOMINAL_V;
-		float duty_c = 0.5f + uc_svpwm / DQ_VDC_NOMINAL_V;
+		float duty_a = 0.5f + ua_svpwm / dq_vdc_feedback;
+		float duty_b = 0.5f + ub_svpwm / dq_vdc_feedback;
+		float duty_c = 0.5f + uc_svpwm / dq_vdc_feedback;
 
 		duty_a = fminf(fmaxf(duty_a, 0.05f), 0.95f);
 		duty_b = fminf(fmaxf(duty_b, 0.05f), 0.95f);
