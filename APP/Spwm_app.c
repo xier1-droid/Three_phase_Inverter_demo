@@ -45,13 +45,13 @@ void Inverter_Init(void)
     memset(&inverter_status, 0, sizeof(inverter_status));
     memset(&measurements, 0, sizeof(measurements));
 
-    inverter_config.vll_ref_rms = 10.0f;
+    inverter_config.vll_ref_rms = 32.0f;
     inverter_config.voltage_kp = 0.025f;
     inverter_config.voltage_ki = 0.006f;
-    inverter_config.outer_kp = 0.5f;
-    inverter_config.outer_ki = 0.0f;
-    inverter_config.current_kp = 1.0f;
-    inverter_config.current_ki = 0.0008f;
+    inverter_config.outer_kp = 0.65f;
+    inverter_config.outer_ki = 0.001f;
+    inverter_config.current_kp = 1.2f;
+    inverter_config.current_ki = 0.009f;
     inverter_config.vdc = DQ_VDC_NOMINAL_V;
 
     DqControl_Init(&dq_control, &inverter_config);

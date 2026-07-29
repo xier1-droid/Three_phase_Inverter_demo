@@ -6,6 +6,8 @@
 void Uart_init(void);
 int my_printf(UART_HandleTypeDef *huart, const char *format, ...);
 void uart_proc(void);
+void JustFloat_Task(void);
+bool JustFloat_IsEnabled(void);
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
 

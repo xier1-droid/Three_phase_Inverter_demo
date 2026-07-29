@@ -2,10 +2,15 @@
 #include "stm32f4xx_hal_uart.h"
 
 #define TX_BUF_SIZE 256
+#define JUSTFLOAT_CHANNEL_COUNT 4U
+#define JUSTFLOAT_DATA_SIZE     (JUSTFLOAT_CHANNEL_COUNT * sizeof(float))
+#define JUSTFLOAT_FRAME_SIZE    (JUSTFLOAT_DATA_SIZE + 4U)
 
 static uint8_t  uart_tx_busy = 0;          // 0=���� 1=æ
 static uint8_t  uart_tx_buf[TX_BUF_SIZE];  // ���ͻ���
 static uint16_t uart_tx_len = 0;           // ���η��ͳ���
+
+static volatile uint8_t justfloat_enabled = 0U;
 
 #define UART_RX_DMA_BUFFER_SIZE 512
 #define UART_DMA_BUFFER_SIZE 512
@@ -23,6 +28,8 @@ void Uart_init(void)
 
 int my_printf(UART_HandleTypeDef *huart, const char *format, ...)
 {
+    if (justfloat_enabled != 0U) return 0;
+
     // æ��ֱ�Ӷ��������ȵ���С������
     // ����㲻�붪�����Һ����ٽ���Ӷ���
     if (uart_tx_busy) return 0;
@@ -44,6 +51,45 @@ int my_printf(UART_HandleTypeDef *huart, const char *format, ...)
         return 0;
     }
     return len;
+}
+
+bool JustFloat_IsEnabled(void)
+{
+    return (justfloat_enabled != 0U);
+}
+
+void JustFloat_Task(void)
+{
+    static uint32_t last_send_ms = 0U;
+    static const uint8_t frame_tail[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
+    InverterStatus status;
+    uint32_t now_ms = HAL_GetTick();
+
+    if ((justfloat_enabled == 0U) ||
+        ((uint32_t)(now_ms - last_send_ms) < 2U))
+    {
+        return;
+    }
+    last_send_ms = now_ms;
+
+    if (uart_tx_busy != 0U)
+    {
+        return;
+    }
+
+    Inverter_GetStatus(&status);
+    memcpy(&uart_tx_buf[0U * sizeof(float)], &status.id_ref, sizeof(float));
+    memcpy(&uart_tx_buf[1U * sizeof(float)], &status.id, sizeof(float));
+    memcpy(&uart_tx_buf[2U * sizeof(float)], &status.iq_ref, sizeof(float));
+    memcpy(&uart_tx_buf[3U * sizeof(float)], &status.iq, sizeof(float));
+    memcpy(&uart_tx_buf[JUSTFLOAT_DATA_SIZE], frame_tail, sizeof(frame_tail));
+
+    uart_tx_len = (uint16_t)JUSTFLOAT_FRAME_SIZE;
+    uart_tx_busy = 1U;
+    if (HAL_UART_Transmit_IT(&huart1, uart_tx_buf, uart_tx_len) != HAL_OK)
+    {
+        uart_tx_busy = 0U;
+    }
 }
 
 // name=value command table, single-pass parse (see uart_proc below)
@@ -191,6 +237,11 @@ static void cmd_clrfault(float v)
     my_printf(&huart1, "clrfault done, wave8=%d\r\n", wave_enable_tim8);
 }
 
+static void cmd_jf(float v)
+{
+    justfloat_enabled = (v != 0.0f) ? 1U : 0U;
+}
+
 static const uart_cmd_t uart_cmds[] =
 {
     {"vp", cmd_vp},
@@ -204,6 +255,7 @@ static const uart_cmd_t uart_cmds[] =
     {"dqstat", cmd_dqstat},
     {"wave8", cmd_wave8},
     {"clrfault", cmd_clrfault},
+    {"jf", cmd_jf},
 };
 #define UART_CMD_COUNT (sizeof(uart_cmds) / sizeof(uart_cmds[0]))
 

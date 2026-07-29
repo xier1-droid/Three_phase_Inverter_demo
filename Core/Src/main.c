@@ -126,6 +126,7 @@ int main(void)
   while (1)
   {
 		scheduler_run();
+		JustFloat_Task();
 //		printf("{i}%d\r\n	",i);
 //		printf("{Voltage_Get}:%.2f\r\n	",Voltage_Get);
 //		printf("{ADC_v_val}:%.2f\r\n",ADC_v_val);
@@ -156,7 +157,6 @@ int main(void)
 	//*****************************************************************************//
 //		printf("{Three_phase_line_U}:%.2f,%.2f,%.2f\r\n",U_uv,U_vw,U_uw);
 //		printf("{d_q_feedback}:%.2f,%.2f\r\n",dq_vd_feedback,dq_vq_feedback);
-		printf("%.2f,%.2f",inverter_status.vd,inverter_status.vq);
     /* USER CO0DE END WHILE */
 
     /* USER CODE BEGIN 3 */
