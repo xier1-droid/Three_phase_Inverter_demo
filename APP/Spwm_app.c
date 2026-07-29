@@ -20,9 +20,9 @@ static uint8_t tim8_pwm_channels_started = 0;
 static uint16_t count = 0U;
 static float theta = 0.0f;
 static InverterConfig inverter_config;
-static InverterStatus inverter_status;
+InverterStatus inverter_status;
 static DqControl dq_control;
-static InverterMeasurements measurements;
+InverterMeasurements measurements;
 
 static void Inverter_ResetControlState(void)
 {
@@ -45,13 +45,13 @@ void Inverter_Init(void)
     memset(&inverter_status, 0, sizeof(inverter_status));
     memset(&measurements, 0, sizeof(measurements));
 
-    inverter_config.vll_ref_rms = 30.6f;
-    inverter_config.voltage_kp = 0.035f;
+    inverter_config.vll_ref_rms = 10.0f;
+    inverter_config.voltage_kp = 0.025f;
     inverter_config.voltage_ki = 0.006f;
-    inverter_config.outer_kp = 0.0f;
+    inverter_config.outer_kp = 0.5f;
     inverter_config.outer_ki = 0.0f;
-    inverter_config.current_kp = 0.0f;
-    inverter_config.current_ki = 0.0f;
+    inverter_config.current_kp = 1.0f;
+    inverter_config.current_ki = 0.0008f;
     inverter_config.vdc = DQ_VDC_NOMINAL_V;
 
     DqControl_Init(&dq_control, &inverter_config);
@@ -272,33 +272,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 					
 		InverterSampling_Update(&measurements);
 		HAL_DAC_SetValue(&hdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R,
-		                 (uint32_t)(((measurements.iu + 3.0f) / 6.0f)
+		                 (uint32_t)(((measurements.u_vw + 50.0f) / 100.0f)
 		                            * 4096.0f));
-
-//		Current_val = (Current_Get * 3.3f/4096.0f) * 4.96f - 7.956f;      // 电流信号标定(A)//4.96
-//		Voltage_val = (Voltage_Get * 3.3f/4096.0f) * 33.125f - 53.66f;  // 电压信号标定(V)
-		
-//		Voltage_Rms = V_cal_rms(Voltage_val);
-//		Voltage_Rms_Filtered = MovingAverage_Update(&voltage_filter,Voltage_Rms);
-
-//		Current_val = LowPass_Update(&LPF_Current, Current_val);
-//		Current_Rms = C_cal_rms(Current_val);//实际控制可以注释，防止sqrt占用时间
-
-//		Voltage_Rms_2 = V_cal_rms(Voltage_val_2);//-0.11f-0.5f;//0.3f
-//		Voltage_Rms_Filtered = MovingAverage_Update(&voltage_filter,Voltage_Rms_2);		
-
-//		sogi_pll_update(&Grid_PLL, Voltage_val);//锁相环更新
-//		sogi_pll_update(&Grid_PLL, Voltage_val_2);//锁相环更新		
-
-//		//角度向索引值映射
-//    {
-//			float theta_out = Grid_PLL.theta + phase_offset_rad;
-//			theta_out = fmodf(theta_out, 6.2831853f);
-//			if (theta_out < 0.0f) theta_out += 6.2831853f;
-
-//			k = (uint16_t)(theta_out * (400.0f / 6.2831853f));
-//			if (k >= 400) k = 399;
-//		}
 		
 		//************************************三相电流过流检测************************************
 		if (wave_enable_tim8)

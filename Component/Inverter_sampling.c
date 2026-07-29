@@ -107,6 +107,7 @@ void InverterSampling_Update(InverterMeasurements *measurements)
     iu_raw = adc2_buffer[0];
     uuv_raw = adc2_buffer[1];
 
+		
     iw_offset = LowPass_Update(&iw_offset_filter, (float)iw_raw);
     uvw_offset = LowPass_Update(&uvw_offset_filter, (float)uvw_raw);
     iu_offset = LowPass_Update(&iu_offset_filter, (float)iu_raw);
@@ -121,10 +122,10 @@ void InverterSampling_Update(InverterMeasurements *measurements)
     uuv_adc_v = ((float)uuv_raw - uuv_offset)
                 * ADC_REFERENCE_V / ADC_FULL_SCALE_COUNTS;
 
-    measurements->iw = iw_adc_v * 4.629f;
-    measurements->u_vw =((uvw_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (3.922f * 150.0f)) * 0.92342f;
-    measurements->iu = iu_adc_v * 4.57f;
-    measurements->u_uv =((uuv_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (4.0f * 150.0f)) * 0.9324f;
+    measurements->iw = iw_adc_v * 4.990f;
+    measurements->u_vw =((uvw_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (3.922f * 150.0f)) * 0.981517f;
+    measurements->iu = iu_adc_v * 4.8823f;
+    measurements->u_uv =((uuv_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (4.0f * 150.0f)) * 0.97685f;
 
     measurements->iv = -(measurements->iu + measurements->iw);
     measurements->u_u =(2.0f * measurements->u_uv + measurements->u_vw) / 3.0f;

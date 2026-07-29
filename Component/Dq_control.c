@@ -154,6 +154,10 @@ static void DqUpdateCurrentLoop(DqControl *control,
 {
     float error_d = control->held_id_ref - id;
     float error_q = control->held_iq_ref - iq;
+
+//    float error_d = 0.3f - id;
+//    float error_q = 0.0f - iq;
+
     float candidate_integral_d = control->current_d_pi.integral
                                  + control->config.current_ki
                                    * control->config.current_kp * error_d;

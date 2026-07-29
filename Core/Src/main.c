@@ -27,7 +27,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "mydefine.h" // ȫ�ֶ���ͷ�ļ�
+#include "mydefine.h" 
 #include "stdio.h"
 #include "Inverter_sampling.h"
 /* USER CODE END Includes */
@@ -61,7 +61,8 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+extern InverterMeasurements measurements;
+extern InverterStatus inverter_status;
 /* USER CODE END 0 */
 
 /**
@@ -109,19 +110,6 @@ int main(void)
 	{
 		Error_Handler();
 	}
-//  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);// 启动定时器8 通道1
-//  HAL_TIMEx_PWMN_Start(&htim8,TIM_CHANNEL_1);//启动定时器8 通道1的互补通道
-//	 HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);// 启动定时器8 通道1
-//  HAL_TIMEx_PWMN_Start(&htim8,TIM_CHANNEL_2);//启动定时器8 通道1的互补通道
-//  __HAL_TIM_SET_COMPARE(&htim8,TIM_CHANNEL_1,4200);// 设置比较值 
-//	__HAL_TIM_SET_COMPARE(&htim8,TIM_CHANNEL_2,4200);// 设置比较值
-//	
-//  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);// 启动定时器1 通道1
-//  HAL_TIMEx_PWMN_Start(&htim1,TIM_CHANNEL_1);//启动定时器1 通道1的互补通道
-//	 HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);// 启动定时器1 通道1
-//  HAL_TIMEx_PWMN_Start(&htim1,TIM_CHANNEL_2);//启动定时器1 通道1的互补通道
-//  __HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_1,4200);// 设置比较值 
-//	__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_2,4200);// 设置比较值
 	
   HAL_DAC_Start(&hdac,DAC_CHANNEL_1);
 	HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,2048);
@@ -141,25 +129,25 @@ int main(void)
 //		printf("{i}%d\r\n	",i);
 //		printf("{Voltage_Get}:%.2f\r\n	",Voltage_Get);
 //		printf("{ADC_v_val}:%.2f\r\n",ADC_v_val);
-//		printf("{Voltage_val}:%.2f\r\n",Voltage_val);
+//		printf("{Voltage_val}:%.2f\r\n",measurements.u_vw);
 //		printf("{Voltage_Rms}:%.2f\r\n",Voltage_Rms);
 //		printf("{Voltage_Rms_Filtered}:%.2f\r\n",Voltage_Rms_Filtered);
 //		printf("{target_vrmscurrent_vrms}%.2f,%.2f\r\n",target_v ,Voltage_Rms_Filtered);
 		
 //		printf("{Current_Get}%.2f\r\n	",Current_Get);
 //		printf("{ADC_c_val}:%.2f\r\n",ADC_c_val);
-//		printf("{Current_val}:%.2f\r\n",Current_val);
+//		printf("{Current_val}:%.2f\r\n",measurements.iu);
 //		printf("{Current_Rms}:%.2f\r\n",Current_Rms);
 //		printf("{PID_ADJUST_Current}%.2f,%.2f\r\n",target_c/sqrtf(2),Current_Rms);
 //		printf("{sine_norm}%.2f,%.2f\r\n",PID_OUT_C,Iref_inst);
 //*****************************************************************************//		
 //		printf("{Voltage_Get_2}:%.2f\r\n	",Voltage_Get_2);
 //		printf("{ADC_v_val_2}:%.2f\r\n",ADC_v_val_2);
-//		printf("{Voltage_val_2}:%.2f\r\n",Voltage_val_2);
+//		printf("{Voltage_val_2}:%.2f\r\n",measurements.u_uv);
 //		printf("{Voltage_Rms_2}:%.2f\r\n",Voltage_Rms_2);
 //		printf("{Voltage_Rms_Filtered}:%.2f\r\n",Voltage_Rms_Filtered);
 		
-//		printf("{Current_Get_2}:%.2f\r\n	",Current_Get_2);
+//		printf("{Current_Get_2}:%.2f\r\n	",measurements.iw);
 //		printf("{ADC_c_val_2}:%.2f\r\n",ADC_c_val_2);
 //		printf("{Current_val_2}:%.2f\r\n",Current_val_2);
 		
@@ -168,6 +156,7 @@ int main(void)
 	//*****************************************************************************//
 //		printf("{Three_phase_line_U}:%.2f,%.2f,%.2f\r\n",U_uv,U_vw,U_uw);
 //		printf("{d_q_feedback}:%.2f,%.2f\r\n",dq_vd_feedback,dq_vq_feedback);
+		printf("%.2f,%.2f",inverter_status.vd,inverter_status.vq);
     /* USER CO0DE END WHILE */
 
     /* USER CODE BEGIN 3 */
