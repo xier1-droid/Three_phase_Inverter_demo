@@ -12,6 +12,7 @@
 #define ADC_REFERENCE_V                3.3f
 #define ADC_OFFSET_FILTER_ALPHA        0.9999f
 #define ADC_OFFSET_CALIBRATION_SAMPLES 256U
+#define ADC_OFFSET_TRACKING_DELAY_SAMPLES 10000U
 
 static volatile uint32_t adc1_buffer[2];
 static volatile uint32_t adc2_buffer[2];
@@ -20,6 +21,7 @@ static LowPassFilter_t uvw_offset_filter;
 static LowPassFilter_t iw_offset_filter;
 static LowPassFilter_t uuv_offset_filter;
 static LowPassFilter_t iu_offset_filter;
+static uint32_t offset_tracking_delay_count;
 
 static void InverterSampling_Calibrate(void)
 {
@@ -27,6 +29,7 @@ static void InverterSampling_Calibrate(void)
     uint32_t iw_sum = 0U;
     uint32_t uuv_sum = 0U;
     uint32_t iu_sum = 0U;
+    uint32_t primask;
     uint16_t index;
 
     for (index = 0U; index < ADC_OFFSET_CALIBRATION_SAMPLES; index++)
@@ -38,6 +41,8 @@ static void InverterSampling_Calibrate(void)
         HAL_Delay(1U);
     }
 
+    primask = __get_PRIMASK();
+    __disable_irq();
     LowPass_Init(&uvw_offset_filter,
                  ADC_OFFSET_FILTER_ALPHA,
                  (float)uvw_sum / ADC_OFFSET_CALIBRATION_SAMPLES);
@@ -50,6 +55,11 @@ static void InverterSampling_Calibrate(void)
     LowPass_Init(&iu_offset_filter,
                  ADC_OFFSET_FILTER_ALPHA,
                  (float)iu_sum / ADC_OFFSET_CALIBRATION_SAMPLES);
+    offset_tracking_delay_count = 0U;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
 }
 
 bool InverterSampling_Init(void)
@@ -96,6 +106,7 @@ void InverterSampling_Update(InverterMeasurements *measurements)
     float uvw_offset;
     float iu_offset;
     float uuv_offset;
+    bool track_offsets;
 
     if (measurements == NULL)
     {
@@ -107,11 +118,34 @@ void InverterSampling_Update(InverterMeasurements *measurements)
     iu_raw = adc2_buffer[0];
     uuv_raw = adc2_buffer[1];
 
-		
-    iw_offset = LowPass_Update(&iw_offset_filter, (float)iw_raw);
-    uvw_offset = LowPass_Update(&uvw_offset_filter, (float)uvw_raw);
-    iu_offset = LowPass_Update(&iu_offset_filter, (float)iu_raw);
-    uuv_offset = LowPass_Update(&uuv_offset_filter, (float)uuv_raw);
+    track_offsets = false;
+    if ((TIM8->BDTR & TIM_BDTR_MOE) != 0U)
+    {
+        offset_tracking_delay_count = 0U;
+    }
+    else if (offset_tracking_delay_count < ADC_OFFSET_TRACKING_DELAY_SAMPLES)
+    {
+        offset_tracking_delay_count++;
+    }
+    else
+    {
+        track_offsets = true;
+    }
+
+    if (track_offsets)
+    {
+        iw_offset = LowPass_Update(&iw_offset_filter, (float)iw_raw);
+        uvw_offset = LowPass_Update(&uvw_offset_filter, (float)uvw_raw);
+        iu_offset = LowPass_Update(&iu_offset_filter, (float)iu_raw);
+        uuv_offset = LowPass_Update(&uuv_offset_filter, (float)uuv_raw);
+    }
+    else
+    {
+        iw_offset = iw_offset_filter.filtered;
+        uvw_offset = uvw_offset_filter.filtered;
+        iu_offset = iu_offset_filter.filtered;
+        uuv_offset = uuv_offset_filter.filtered;
+    }
 
     iw_adc_v = ((float)iw_raw - iw_offset)
                * ADC_REFERENCE_V / ADC_FULL_SCALE_COUNTS;

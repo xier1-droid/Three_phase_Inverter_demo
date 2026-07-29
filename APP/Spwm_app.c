@@ -50,8 +50,8 @@ void Inverter_Init(void)
     inverter_config.voltage_ki = 0.006f;
     inverter_config.outer_kp = 0.65f;
     inverter_config.outer_ki = 0.001f;
-    inverter_config.current_kp = 1.5f;
-    inverter_config.current_ki = 0.012f;
+    inverter_config.current_kp = 1.0f;
+    inverter_config.current_ki = 0.02f;
     inverter_config.vdc = DQ_VDC_NOMINAL_V;
 
     DqControl_Init(&dq_control, &inverter_config);
