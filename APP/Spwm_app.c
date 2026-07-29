@@ -45,7 +45,7 @@ void Inverter_Init(void)
     memset(&inverter_status, 0, sizeof(inverter_status));
     memset(&measurements, 0, sizeof(measurements));
 
-    inverter_config.vll_ref_rms = 32.0f;
+    inverter_config.vll_ref_rms = 31.35f;
     inverter_config.voltage_kp = 0.025f;
     inverter_config.voltage_ki = 0.006f;
     inverter_config.outer_kp = 0.65f;
@@ -271,6 +271,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((ADC_c_val_2+1.75f)/3.3f)*4096));
 					
 		InverterSampling_Update(&measurements);
+		inverter_status.vdc = measurements.vdc;
 		HAL_DAC_SetValue(&hdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R,
 		                 (uint32_t)(((measurements.u_vw + 50.0f) / 100.0f)
 		                            * 4096.0f));
@@ -366,6 +367,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			control_input.vd_ref = inverter_config.vll_ref_rms
 			                       * DQ_SQRT_TWO_THIRDS
 			                       * soft_start_ratio;
+			control_input.vdc = measurements.vdc;
 			control_input.u_u = measurements.u_u;
 			control_input.u_vw = measurements.u_vw;
 			control_input.iu = measurements.iu;
@@ -385,7 +387,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			                 control_output.uq,
 			                 sin_theta,
 			                 cos_theta,
-			                 inverter_config.vdc,
+			                 measurements.vdc,
 			                 &duty);
 
 			inverter_status.vd_ref = control_input.vd_ref;

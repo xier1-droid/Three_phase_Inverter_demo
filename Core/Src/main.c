@@ -157,7 +157,15 @@ int main(void)
 	//*****************************************************************************//
 //		printf("{Three_phase_line_U}:%.2f,%.2f,%.2f\r\n",U_uv,U_vw,U_uw);
 //		printf("{d_q_feedback}:%.2f,%.2f\r\n",dq_vd_feedback,dq_vq_feedback);
-    /* USER CO0DE END WHILE */
+//		if ((uint32_t)(HAL_GetTick() - vdc_print_tick) >= 100U)
+//		{
+//			vdc_print_tick = HAL_GetTick();
+//			printf("{vdc_raw}:%u,{vdc_zero}:%.1f,{vdc_filter}:%.2f\r\n",
+//			       (unsigned int)InverterSampling_GetVdcRaw(),
+//			       InverterSampling_GetVdcZeroOffset(),
+//			       InverterSampling_GetVdc());
+//		}
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }

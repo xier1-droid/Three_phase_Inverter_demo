@@ -22,6 +22,7 @@ typedef struct
     uint8_t mode;
     uint8_t running;
     uint8_t fault_latched;
+    float vdc;
     float vd_ref;
     float vd;
     float vq;

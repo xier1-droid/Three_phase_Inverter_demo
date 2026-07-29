@@ -150,6 +150,7 @@ static void DqUpdateCurrentLoop(DqControl *control,
                                 float vq,
                                 float id,
                                 float iq,
+                                float vdc,
                                 DqControlOutput *output)
 {
     float error_d = control->held_id_ref - id;
@@ -216,7 +217,7 @@ static void DqUpdateCurrentLoop(DqControl *control,
         DqVectorMagnitudeSquared(candidate_ud, candidate_uq);
     old_voltage_raw_squared = DqVectorMagnitudeSquared(old_ud, old_uq);
 
-    vector_limit = DQ_VOLTAGE_UTILIZATION * control->config.vdc
+    vector_limit = DQ_VOLTAGE_UTILIZATION * vdc
                    * DQ_INV_SQRT_THREE;
     limited_candidate_ud = candidate_ud;
     limited_candidate_uq = candidate_uq;
@@ -368,6 +369,7 @@ void DqControl_Step(DqControl *control,
                         output->vq,
                         output->id,
                         output->iq,
+                        input->vdc,
                         output);
 #endif
 
@@ -375,7 +377,7 @@ void DqControl_Step(DqControl *control,
     output->voltage_limited = DqLimitVector(
         &output->ud,
         &output->uq,
-        DQ_VOLTAGE_UTILIZATION * control->config.vdc
+        DQ_VOLTAGE_UTILIZATION * input->vdc
         * DQ_INV_SQRT_THREE);
 #endif
 }

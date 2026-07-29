@@ -1,8 +1,9 @@
 #include "Uart_cmp.h"
+#include "Inverter_sampling.h"
 #include "stm32f4xx_hal_uart.h"
 
 #define TX_BUF_SIZE 256
-#define JUSTFLOAT_CHANNEL_COUNT 4U
+#define JUSTFLOAT_CHANNEL_COUNT 1U
 #define JUSTFLOAT_DATA_SIZE     (JUSTFLOAT_CHANNEL_COUNT * sizeof(float))
 #define JUSTFLOAT_FRAME_SIZE    (JUSTFLOAT_DATA_SIZE + 4U)
 
@@ -62,7 +63,7 @@ void JustFloat_Task(void)
 {
     static uint32_t last_send_ms = 0U;
     static const uint8_t frame_tail[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
-    InverterStatus status;
+    float vdc;
     uint32_t now_ms = HAL_GetTick();
 
     if ((justfloat_enabled == 0U) ||
@@ -77,11 +78,8 @@ void JustFloat_Task(void)
         return;
     }
 
-    Inverter_GetStatus(&status);
-    memcpy(&uart_tx_buf[0U * sizeof(float)], &status.id_ref, sizeof(float));
-    memcpy(&uart_tx_buf[1U * sizeof(float)], &status.id, sizeof(float));
-    memcpy(&uart_tx_buf[2U * sizeof(float)], &status.iq_ref, sizeof(float));
-    memcpy(&uart_tx_buf[3U * sizeof(float)], &status.iq, sizeof(float));
+    vdc = InverterSampling_GetVdc();
+    memcpy(&uart_tx_buf[0U * sizeof(float)], &vdc, sizeof(float));
     memcpy(&uart_tx_buf[JUSTFLOAT_DATA_SIZE], frame_tail, sizeof(frame_tail));
 
     uart_tx_len = (uint16_t)JUSTFLOAT_FRAME_SIZE;
@@ -212,7 +210,7 @@ static void cmd_dqstat(float v)
               "ud=%.2f uq=%.2f ovp=%.4f ovi=%.4f "
               "icp=%.4f ici=%.4f current_ref_limited=%u "
               "voltage_limited=%u\r\n",
-              status.mode, status.config.vdc,
+              status.mode, status.vdc,
               status.vd_ref, status.vd, status.vq,
               status.id_ref, status.id, status.iq_ref, status.iq,
               status.ud, status.uq,
