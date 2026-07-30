@@ -5,7 +5,7 @@
 #include <string.h>
 
 #define DQ_OUTER_DIVIDER_RELOAD       3U
-#define DQ_PI_CORRECTION_LIMIT_V      3.0f
+#define DQ_PI_CORRECTION_LIMIT_V      15.0f
 #define DQ_SAMPLE_HALF_STEP_COS       0.999969157f
 #define DQ_SAMPLE_HALF_STEP_SIN       0.007853901f
 #define DQ_ELECTRICAL_OMEGA_RAD_S     314.1592654f

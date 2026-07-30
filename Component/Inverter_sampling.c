@@ -13,7 +13,7 @@
 #define ADC_OFFSET_FILTER_ALPHA        0.9999f
 #define ADC_OFFSET_CALIBRATION_SAMPLES 256U
 #define ADC_OFFSET_TRACKING_DELAY_SAMPLES 10000U
-#define VDC_FILTER_ALPHA               0.9999f
+#define VDC_FILTER_ALPHA               0.995f
 #define VDC_SENSING_GAIN               0.0103982f
 #define VDC_ZERO_OFFSET_COUNTS         2099.7f
 
@@ -195,7 +195,7 @@ void InverterSampling_Update(InverterMeasurements *measurements)
     measurements->iw = iw_adc_v * 4.990f;
     measurements->u_vw =((uvw_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (3.922f * 150.0f)) * 0.981517f;
     measurements->iu = iu_adc_v * 4.8823f;
-    measurements->u_uv =((uuv_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (4.0f * 150.0f)) * 0.97685f;
+    measurements->u_uv =((uuv_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (4.0f * 150.0f)) * 0.9829186f;
     measurements->vdc = LowPass_Update(
         &vdc_filter, InverterSampling_ConvertVdc((float)vdc_raw));
     measurements->vdc_raw = (uint16_t)vdc_raw;
