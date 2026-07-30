@@ -1,8 +1,8 @@
 # Three-Phase Inverter Demo
 
-基于 STM32F407VETx 的三相离网逆变器控制工程，使用 Keil MDK-ARM、STM32 HAL 和 TIM8 高级定时器实现三相互补 SVPWM。本分支用于开发和验证 DQ 电压电流级联双闭环。
+基于 STM32F407VETx 的三相离网逆变器控制工程，使用 Keil MDK-ARM、STM32 HAL 和 TIM8 高级定时器实现三相互补 SVPWM。本分支保留 DQ 开环和 DQ 单电压环，不再包含 DQ 电压电流级联双闭环。
 
-> 当前默认仍为已经完成调试的 DQ 单电压环。双闭环控制代码已经接入并通过编译与静态测试，但四个新增 PI 增益默认为 0，上板前必须从低电压、小增益开始调试。
+> 当前默认模式为 DQ 单电压环。控制器使用输出电压前馈叠加 d/q 电压 PI 修正，并根据实时母线电压限制最终电压矢量。
 
 ## 当前功能
 
@@ -10,10 +10,9 @@
 - 50 Hz 同步旋转坐标系、Clarke/Park 与逆 Park 变换
 - 最值公共模注入 SVPWM
 - TIM8 CH4 在载波中点触发 ADC1/ADC2 同步采样
-- 两相电流采样、第三相电流重构和电流 DQ 变换
-- DQ 开环、DQ 单电压环和 DQ 电压电流双闭环三种编译模式
-- 5 kHz 电压外环和 20 kHz 电流内环
-- 输出电压前馈、DQ 交叉解耦和级联抗积分饱和
+- 两相电流采样和第三相电流重构，用于三相软件过流保护
+- DQ 开环和 DQ 单电压环两种编译模式
+- 输出电压前馈、d/q 电压 PI 和电压矢量限幅
 - 电压软启动、软停止、软件过流锁存和人工故障清除
 - UART 参数调节和控制状态查询
 
@@ -26,7 +25,6 @@
 ```c
 #define DQ_OPEN_LOOP                 0U
 #define DQ_VOLTAGE_LOOP              1U
-#define DQ_VOLTAGE_CURRENT_LOOP      2U
 
 #ifndef DQ_CONTROL_MODE
 #define DQ_CONTROL_MODE              DQ_VOLTAGE_LOOP
@@ -37,26 +35,16 @@
 | --- | --- |
 | `DQ_OPEN_LOOP` | `ud=vd_ref`、`uq=0`，保留软启停、SVPWM和保护 |
 | `DQ_VOLTAGE_LOOP` | 参考电压前馈加 d/q 电压 PI，当前默认模式 |
-| `DQ_VOLTAGE_CURRENT_LOOP` | 5 kHz 电压外环产生电流参考，20 kHz 电流内环产生逆变器电压指令 |
 
 模式只能在编译时切换，不支持 UART 运行时切换。
 
-## 双闭环结构
+## 单电压环结构
 
 ```text
 vd_ref / vq_ref
        |
        v
-5 kHz voltage PI
-       |
-       v
-id_ref / iq_ref     <= 3.5 A vector limit
-       |
-       v
-20 kHz current PI   <= 10 V correction vector limit
-       |
-       v
-vd/vq feedforward + DQ decoupling
+d/q voltage PI + vd_ref feedforward
        |
        v
 ud/uq                <= 0.9 * Vdc / sqrt(3)
@@ -65,14 +53,12 @@ ud/uq                <= 0.9 * Vdc / sqrt(3)
 Inverse Park + SVPWM + TIM8
 ```
 
-当前 Park 变换约定下，电流环输出为：
+当前控制器输出为：
 
 ```c
-ud = vd + delta_ud - omega * L * iq;
-uq = vq + delta_uq + omega * L * id;
+ud = vd_ref + voltage_pi(vd_ref - vd);
+uq = voltage_pi(-vq);
 ```
-
-滤波电感按 `L=1 mH` 配置，暂不加入电感电阻前馈。ADC 在 PWM 周期中点采样，双闭环模式使用半个控制步长补偿约 25 us 的固定采样延迟。
 
 工程保留现有离散 PI 形式：
 
@@ -88,21 +74,16 @@ output = kp * error + integral_candidate;
 | 参数 | 当前值 |
 | --- | ---: |
 | MCU | STM32F407VETx |
-| 直流母线控制输入 | 固定 60 V |
-| PWM / 电流环频率 | 20 kHz |
-| 电压外环频率 | 5 kHz |
+| 直流母线控制输入 | ADC 实时采样值 |
+| PWM / 控制频率 | 20 kHz |
 | 输出基波频率 | 50 Hz |
-| 默认线电压参考 | 30.6 Vrms |
-| 默认相电压峰值参考 | 约 24.985 V |
-| 单电压环 Kp / Ki | 0.035 / 0.006 |
-| 双环外环 Kp / Ki | 0 / 0 |
-| 双环内环 Kp / Ki | 0 / 0 |
-| 电流参考矢量限制 | 3.5 A |
-| 电流 PI 校正矢量限制 | 10 V |
-| 60 V 母线下最终电压矢量限制 | 31.1769 V |
+| 默认线电压参考 | 32.0 Vrms |
+| 默认相电压峰值参考 | 约 26.128 V |
+| 单电压环 Kp / Ki | 0.028 / 0.008 |
+| 最终电压矢量限制 | `0.9 * Vdc / sqrt(3)` |
 | 软件过流阈值 | 5.0 A，连续 3 次采样 |
 
-当前没有直流母线 ADC 通道，控制器暂时传入固定 `Vdc=60.0 V`。接入真实母线采样后应替换该输入，并保留现有控制接口。
+直流母线电压由 ADC 实时采样并送入控制器和 SVPWM。母线采样标定、零偏冻结和滤波实现在 `Component/Inverter_sampling.c`。
 
 ## 同步采样
 
@@ -131,7 +112,7 @@ ADC 关闭连续转换，使用 TIM8 TRGO 上升沿启动；DMA 保持循环请�
 
 ```text
 APP/                         Application control and scheduling
-Component/Dq_control.c/.h    DQ cascaded-loop controller
+Component/Dq_control.c/.h    DQ open-loop and voltage-loop controller
 Component/                   ADC, UART, filters and control components
 Core/                        STM32CubeMX initialization and interrupts
 Drivers/                     STM32 HAL and CMSIS dependencies
@@ -144,7 +125,7 @@ MDK-ARM/                     Keil project and build outputs
 2. 在 `Component/Dq_control.h` 中选择所需的 `DQ_CONTROL_MODE`。
 3. 执行 Rebuild，并使用匹配 STM32F407VETx 的调试器下载固件。
 
-本分支使用 ARMCC 5.06u7 分别全量构建三种控制模式，结果均为：
+本分支使用 ARMCC 5.06u7 全量构建默认 DQ 单电压环模式，结果为：
 
 ```text
 0 Error(s), 0 Warning(s)
@@ -156,8 +137,6 @@ MDK-ARM/                     Keil project and build outputs
 
 USART1 当前波特率为 `460800`，命令格式为 `name=value`。
 
-### 运行和单电压环
-
 ```text
 wave8=1       Start inverter output
 wave8=0       Request soft stop
@@ -166,33 +145,21 @@ vref=3        Set 3 Vrms line-to-line reference
 vp=0.035      Set shared d/q voltage-loop Kp
 vi=0.006      Set shared d/q voltage-loop Ki
 vstat=1       Print voltage-loop status
+jf=1          Enable JustFloat Vdc output
+jf=0          Disable JustFloat output
 ```
-
-### 双闭环参数和状态
-
-```text
-ovp=<value>   Set outer voltage-loop Kp, range 0.0 to 2.0
-ovi=<value>   Set outer voltage-loop Ki, range 0.0 to 2.0
-icp=<value>   Set inner current-loop Kp, range 0.0 to 20.0
-ici=<value>   Set inner current-loop Ki, range 0.0 to 2.0
-dqstat=1      Print cascaded-loop feedback, references and limits
-```
-
-四个双闭环增益只能在 `wave8=0` 时修改。运行中修改返回 `busy`，越界或非法数值返回 `invalid`。
 
 ## 建议上板顺序
 
-1. 编译默认 `DQ_VOLTAGE_LOOP`，使用纯电阻负载和 `dqstat=1` 检查 `id>0`、`iq` 接近 0。
-2. 编译 `DQ_OPEN_LOOP`，设置 `vref=3`，确认软启动、相序、SVPWM和保护行为。
-3. 编译 `DQ_VOLTAGE_CURRENT_LOOP`，保持四个新 PI 增益为 0，检查电压指令和采样方向。
-4. 停机设置低电压参考，从很小的 `icp` 开始调电流内环，再加入小量 `ici`。
-5. 电流跟踪稳定后，再依次调节 `ovp` 和 `ovi`。
-6. 最后恢复额定参考和负载，检查 5 A 软件保护以及 TIM8 ISR 执行时间。
+1. 编译 `DQ_OPEN_LOOP`，设置 `vref=3`，确认软启动、相序、SVPWM和保护行为。
+2. 编译默认 `DQ_VOLTAGE_LOOP`，继续使用低电压参考和纯电阻负载，通过 `vstat=1` 检查 `vd/vq` 极性和电压指令。
+3. 从较小的 `vp/vi` 开始调节单电压环，确认输出稳定后再逐步提高参考和负载。
+4. 最后恢复额定参考和负载，检查 5 A 软件保护以及 TIM8 ISR 执行时间。
 
 ## 注意事项
 
 - 这是功率电子实验工程。上电前必须确认母线限流、驱动互锁、死区、采样极性和硬件过流保护有效。
-- 双闭环实现尚不能替代上板验证；首次调试必须使用低母线电压或受限电源、小电压参考和小增益。
+- 单电压环的编译和静态检查不能替代上板验证；首次调试必须使用低母线电压或受限电源、小电压参考和小增益。
 - 软件过流检测只能作为补充，不能替代硬件比较器和 TIM8 Break 关断。
 - 边沿对齐 PWM 的固定中点采样仍可能在约 50% 占空比附近靠近开关沿，需要实测电流噪声。
 - 部分历史源文件使用 GBK/CP936 中文注释。新增源代码、代码注释、宏和 UART 文本应只使用英文 ASCII，避免转换旧文件编码。

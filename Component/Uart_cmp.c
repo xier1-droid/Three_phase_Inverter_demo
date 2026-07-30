@@ -147,78 +147,6 @@ static void cmd_vstat(float v)
               status.config.voltage_kp, status.config.voltage_ki);
 }
 
-static void print_cascade_gains(void)
-{
-    InverterStatus status;
-
-    Inverter_GetStatus(&status);
-    my_printf(&huart1,
-              "DQ_Cascade: ovp=%.4f ovi=%.4f icp=%.4f ici=%.4f\r\n",
-              status.config.outer_kp, status.config.outer_ki,
-              status.config.current_kp, status.config.current_ki);
-}
-
-static void report_cascade_set_result(bool accepted)
-{
-    if (accepted)
-    {
-        print_cascade_gains();
-    }
-    else if (wave_enable_tim8 != 0U)
-    {
-        my_printf(&huart1, "busy\r\n");
-    }
-    else
-    {
-        my_printf(&huart1, "invalid\r\n");
-    }
-}
-
-static void cmd_ovp(float v)
-{
-    report_cascade_set_result(
-        Inverter_SetParameter(INVERTER_PARAMETER_OUTER_KP, v));
-}
-
-static void cmd_ovi(float v)
-{
-    report_cascade_set_result(
-        Inverter_SetParameter(INVERTER_PARAMETER_OUTER_KI, v));
-}
-
-static void cmd_icp(float v)
-{
-    report_cascade_set_result(
-        Inverter_SetParameter(INVERTER_PARAMETER_CURRENT_KP, v));
-}
-
-static void cmd_ici(float v)
-{
-    report_cascade_set_result(
-        Inverter_SetParameter(INVERTER_PARAMETER_CURRENT_KI, v));
-}
-
-static void cmd_dqstat(float v)
-{
-    InverterStatus status;
-
-    (void)v;
-    Inverter_GetStatus(&status);
-    my_printf(&huart1,
-              "mode=%u vdc=%.2f vd_ref=%.2f vd=%.2f vq=%.2f "
-              "id_ref=%.2f id=%.2f iq_ref=%.2f iq=%.2f "
-              "ud=%.2f uq=%.2f ovp=%.4f ovi=%.4f "
-              "icp=%.4f ici=%.4f current_ref_limited=%u "
-              "voltage_limited=%u\r\n",
-              status.mode, status.vdc,
-              status.vd_ref, status.vd, status.vq,
-              status.id_ref, status.id, status.iq_ref, status.iq,
-              status.ud, status.uq,
-              status.config.outer_kp, status.config.outer_ki,
-              status.config.current_kp, status.config.current_ki,
-              status.current_ref_limited, status.voltage_limited);
-}
-
 static void cmd_wave8(float v)
 {
     if (v != 0.0f)
@@ -246,11 +174,6 @@ static const uart_cmd_t uart_cmds[] =
     {"vi", cmd_vi},
     {"vref", cmd_vref},
     {"vstat", cmd_vstat},
-    {"ovp", cmd_ovp},
-    {"ovi", cmd_ovi},
-    {"icp", cmd_icp},
-    {"ici", cmd_ici},
-    {"dqstat", cmd_dqstat},
     {"wave8", cmd_wave8},
     {"clrfault", cmd_clrfault},
     {"jf", cmd_jf},

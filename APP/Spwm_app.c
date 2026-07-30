@@ -3,9 +3,13 @@
 #include "Svpwm.h"
 
 #define DQ_SQRT_TWO_THIRDS 0.816496581f
-#define DQ_VDC_NOMINAL_V 60.0f
 #define CURRENT_TRIP_A 5.0f
 #define OVERCURRENT_TRIP_COUNT 3U
+#define PWM_PERIOD_COUNTS 8400.0f
+#define PWM_IDLE_COMPARE 4200U
+#define INDICATOR_TOGGLE_TICKS 2000U
+#define FUNDAMENTAL_FREQUENCY_HZ 50.0f
+#define CONTROL_FREQUENCY_HZ 20000.0f
 
 static float soft_start_ratio = 0.0f;      // 0.0 ~ 1.0，当前软启动系数
 #define SOFT_START_CYCLES   50.0f   // 软启动持续的基波周期数（50Hz下 20周期≈0.4s）
@@ -30,13 +34,8 @@ static void Inverter_ResetControlState(void)
     inverter_status.vd_ref = 0.0f;
     inverter_status.vd = 0.0f;
     inverter_status.vq = 0.0f;
-    inverter_status.id_ref = 0.0f;
-    inverter_status.id = 0.0f;
-    inverter_status.iq_ref = 0.0f;
-    inverter_status.iq = 0.0f;
     inverter_status.ud = 0.0f;
     inverter_status.uq = 0.0f;
-    inverter_status.current_ref_limited = 0U;
     inverter_status.voltage_limited = 0U;
 }
 
@@ -48,11 +47,6 @@ void Inverter_Init(void)
     inverter_config.vll_ref_rms = 32.00f;
     inverter_config.voltage_kp = 0.028f;
     inverter_config.voltage_ki = 0.008f;
-    inverter_config.outer_kp = 0.65f;
-    inverter_config.outer_ki = 0.001f;
-    inverter_config.current_kp = 1.0f;
-    inverter_config.current_ki = 0.02f;
-    inverter_config.vdc = DQ_VDC_NOMINAL_V;
 
     DqControl_Init(&dq_control, &inverter_config);
     inverter_status.mode = DQ_CONTROL_MODE;
@@ -63,7 +57,6 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
 {
     InverterConfig new_config = inverter_config;
     uint32_t primask;
-    uint8_t reset_required = 0U;
 
     switch (parameter)
     {
@@ -92,46 +85,6 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
             new_config.voltage_ki = value;
             break;
 
-        case INVERTER_PARAMETER_OUTER_KP:
-            if ((wave_enable_tim8 != 0U) ||
-                !((value >= 0.0f) && (value <= DQ_OUTER_KP_MAX)))
-            {
-                return false;
-            }
-            new_config.outer_kp = value;
-            reset_required = 1U;
-            break;
-
-        case INVERTER_PARAMETER_OUTER_KI:
-            if ((wave_enable_tim8 != 0U) ||
-                !((value >= 0.0f) && (value <= DQ_OUTER_KI_MAX)))
-            {
-                return false;
-            }
-            new_config.outer_ki = value;
-            reset_required = 1U;
-            break;
-
-        case INVERTER_PARAMETER_CURRENT_KP:
-            if ((wave_enable_tim8 != 0U) ||
-                !((value >= 0.0f) && (value <= DQ_CURRENT_KP_MAX)))
-            {
-                return false;
-            }
-            new_config.current_kp = value;
-            reset_required = 1U;
-            break;
-
-        case INVERTER_PARAMETER_CURRENT_KI:
-            if ((wave_enable_tim8 != 0U) ||
-                !((value >= 0.0f) && (value <= DQ_CURRENT_KI_MAX)))
-            {
-                return false;
-            }
-            new_config.current_ki = value;
-            reset_required = 1U;
-            break;
-
         default:
             return false;
     }
@@ -141,10 +94,6 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
     inverter_config = new_config;
     DqControl_SetConfig(&dq_control, &inverter_config);
     inverter_status.config = inverter_config;
-    if (reset_required != 0U)
-    {
-        Inverter_ResetControlState();
-    }
     if (primask == 0U)
     {
         __enable_irq();
@@ -200,9 +149,9 @@ void Inverter_Wave_Start_TIM8(void)
 
     /* A logical stop only clears MOE; restart by enabling MOE again. */
     __HAL_TIM_MOE_ENABLE(&htim8);
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 4200);
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 4200);
-		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, 4200);
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, PWM_IDLE_COMPARE);
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, PWM_IDLE_COMPARE);
+		__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, PWM_IDLE_COMPARE);
 	
 	    wave_enable_tim8 = 1;
         inverter_status.running = 1U;
@@ -214,9 +163,9 @@ void Inverter_Wave_Stop_TIM8(void)
     wave_enable_tim8 = 0;
     inverter_status.running = 0U;
 
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 4200);
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 4200);
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, 4200);
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, PWM_IDLE_COMPARE);
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, PWM_IDLE_COMPARE);
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, PWM_IDLE_COMPARE);
 
     /* Disable PWM outputs, but keep TIM8 counter and update IRQ running. */
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
@@ -257,6 +206,116 @@ void Inverter_ClearFault(void)
     }
 }
 
+static void Inverter_UpdateIndicator(void)
+{
+    count++;
+    if (count >= INDICATOR_TOGGLE_TICKS)
+    {
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_10);
+        count = 0U;
+    }
+}
+
+static bool Inverter_CheckOvercurrent(void)
+{
+    float i_abs_max = fmaxf(fabsf(measurements.iu),
+                             fmaxf(fabsf(measurements.iv),
+                                   fabsf(measurements.iw)));
+
+    if (i_abs_max > CURRENT_TRIP_A)
+    {
+        overcurrent_count++;
+    }
+    else
+    {
+        overcurrent_count = 0U;
+    }
+
+    if (overcurrent_count < OVERCURRENT_TRIP_COUNT)
+    {
+        return false;
+    }
+
+    fault_latched = 1U;
+    inverter_status.fault_latched = 1U;
+    Inverter_Wave_Stop_TIM8();
+    return true;
+}
+
+static bool Inverter_UpdateSoftStart(void)
+{
+    if (stop_requested != 0U)
+    {
+        soft_start_ratio -= SOFT_START_STEP;
+        if (soft_start_ratio <= 0.0f)
+        {
+            soft_start_ratio = 0.0f;
+            stop_requested = 0U;
+            Inverter_Wave_Stop_TIM8();
+            return false;
+        }
+    }
+    else if (soft_start_ratio < 1.0f)
+    {
+        soft_start_ratio += SOFT_START_STEP;
+        if (soft_start_ratio >= 1.0f)
+        {
+            soft_start_ratio = 1.0f;
+        }
+    }
+
+    return true;
+}
+
+static void Inverter_RunVoltageControl(void)
+{
+    DqControlInput control_input;
+    DqControlOutput control_output;
+    SvpwmDuty duty;
+    float sin_theta;
+    float cos_theta;
+
+    theta += 2.0f * 3.1415926f * FUNDAMENTAL_FREQUENCY_HZ
+             / CONTROL_FREQUENCY_HZ;
+    if (theta >= 6.2831853f)
+    {
+        theta -= 6.2831853f;
+    }
+    sin_theta = sinf(theta);
+    cos_theta = cosf(theta);
+
+    control_input.vd_ref = inverter_config.vll_ref_rms
+                           * DQ_SQRT_TWO_THIRDS
+                           * soft_start_ratio;
+    control_input.vdc = measurements.vdc;
+    control_input.u_u = measurements.u_u;
+    control_input.u_vw = measurements.u_vw;
+    control_input.sin_theta = sin_theta;
+    control_input.cos_theta = cos_theta;
+
+    DqControl_Step(&dq_control, &control_input, &control_output);
+    Svpwm_Calculate(control_output.ud,
+                     control_output.uq,
+                     sin_theta,
+                     cos_theta,
+                     measurements.vdc,
+                     &duty);
+
+    inverter_status.vd_ref = control_input.vd_ref;
+    inverter_status.vd = control_output.vd;
+    inverter_status.vq = control_output.vq;
+    inverter_status.ud = control_output.ud;
+    inverter_status.uq = control_output.uq;
+    inverter_status.voltage_limited = control_output.voltage_limited;
+
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1,
+                          (uint32_t)(duty.duty_a * PWM_PERIOD_COUNTS));
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
+                          (uint32_t)(duty.duty_b * PWM_PERIOD_COUNTS));
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3,
+                          (uint32_t)(duty.duty_c * PWM_PERIOD_COUNTS));
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if(htim->Instance == TIM8)  
@@ -277,49 +336,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		                            * 4096.0f));
 		
 		//************************************三相电流过流检测************************************
-		if (wave_enable_tim8)
+		if (wave_enable_tim8 == 0U)
 		{
-			
-			float i_abs_max = fmaxf(fabsf(measurements.iu),
-			                         fmaxf(fabsf(measurements.iv),
-			                               fabsf(measurements.iw)));
-
-			if (i_abs_max > CURRENT_TRIP_A)
-			{
-				overcurrent_count++;
-			}
-			else
-			{
-				overcurrent_count = 0;
-			}
-
-			if (overcurrent_count >= OVERCURRENT_TRIP_COUNT)
-			{
-				fault_latched = 1;
-				inverter_status.fault_latched = 1U;
-			}
-		
-			// 故障状态处理：关闭SVPWM输出，故障指示灯闪烁
-			if (fault_latched)
-			{
-				Inverter_Wave_Stop_TIM8();			
-				count++;
-				if (count >= 2000)
-				{
-					HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_10);
-					count = 0;
-				}
-				return;
-			}
+			Inverter_UpdateIndicator();
+			return;
 		}
-		else// 停机状态：保持PWM关闭，故障指示灯同样周期闪烁
+		if (Inverter_CheckOvercurrent())
 		{
-			count++;
-			if (count >= 2000)
-			{
-				HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_10);
-				count = 0;
-			}
+			Inverter_UpdateIndicator();
 			return;
 		}
 
@@ -329,95 +353,18 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((Three_phase_I_v+6.0f)/12.0f)*4096));
 		//************************************占空比更新************************************//		
 
+		if (!Inverter_UpdateSoftStart())
 		{
-			DqControlInput control_input;
-			DqControlOutput control_output;
-			SvpwmDuty duty;
-			float sin_theta;
-			float cos_theta;
-
-			theta += 2.0f * 3.1415926f * 50.0f / 20000.0f;
-			if (theta >= 6.2831853f)
-			{
-				theta -= 6.2831853f;
-			}
-			sin_theta = sinf(theta);
-			cos_theta = cosf(theta);
-
-			if (stop_requested)
-			{
-				soft_start_ratio -= SOFT_START_STEP;
-				if (soft_start_ratio <= 0.0f)
-				{
-					soft_start_ratio = 0.0f;
-					stop_requested = 0;
-					Inverter_Wave_Stop_TIM8();
-					return;
-				}
-			}
-			else if (soft_start_ratio < 1.0f)
-			{
-				soft_start_ratio += SOFT_START_STEP;
-				if (soft_start_ratio >= 1.0f)
-				{
-					soft_start_ratio = 1.0f;
-				}
-			}
-
-			control_input.vd_ref = inverter_config.vll_ref_rms
-			                       * DQ_SQRT_TWO_THIRDS
-			                       * soft_start_ratio;
-			control_input.vdc = measurements.vdc;
-			control_input.u_u = measurements.u_u;
-			control_input.u_vw = measurements.u_vw;
-			control_input.iu = measurements.iu;
-			control_input.iv = measurements.iv;
-			control_input.iw = measurements.iw;
-			control_input.sin_theta = sin_theta;
-			control_input.cos_theta = cos_theta;
-
-			DqControl_Step(&dq_control, &control_input, &control_output);
+			return;
+		}
 
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((v_alpha_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((v_beta_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((dq_vd_feedback+30.0f)/60.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((dq_vq_feedback+30.0f)/60.0f)*4096));
 
-			Svpwm_Calculate(control_output.ud,
-			                 control_output.uq,
-			                 sin_theta,
-			                 cos_theta,
-			                 measurements.vdc,
-			                 &duty);
-
-			inverter_status.vd_ref = control_input.vd_ref;
-			inverter_status.vd = control_output.vd;
-			inverter_status.vq = control_output.vq;
-			inverter_status.id_ref = control_output.id_ref;
-			inverter_status.id = control_output.id;
-			inverter_status.iq_ref = control_output.iq_ref;
-			inverter_status.iq = control_output.iq;
-			inverter_status.ud = control_output.ud;
-			inverter_status.uq = control_output.uq;
-			inverter_status.current_ref_limited =
-				control_output.current_ref_limited;
-			inverter_status.voltage_limited =
-				control_output.voltage_limited;
-
-			__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1,
-			                          (uint32_t)(duty.duty_a * 8400.0f));
-			__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
-			                          (uint32_t)(duty.duty_b * 8400.0f));
-			__HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3,
-			                          (uint32_t)(duty.duty_c * 8400.0f));
-		}
-			count++;
-
-     if(count>=2000)
-     {
-       HAL_GPIO_TogglePin(GPIOC,GPIO_PIN_10);
-       count=0;
-     }
+		Inverter_RunVoltageControl();
+		Inverter_UpdateIndicator();
   }
 
 //		// *** 归一化 ***
