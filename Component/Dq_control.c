@@ -144,6 +144,9 @@ void DqControl_Step(DqControl *control,
                                    control->config.voltage_ki);
 #endif
 
+    output->voltage_d_integral = control->voltage_d_pi.integral;
+    output->voltage_q_integral = control->voltage_q_pi.integral;
+
     output->voltage_limited = DqLimitVector(
         &output->ud,
         &output->uq,

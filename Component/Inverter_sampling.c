@@ -195,7 +195,7 @@ void InverterSampling_Update(InverterMeasurements *measurements)
     measurements->iw = iw_adc_v * 4.990f;
     measurements->u_vw =((uvw_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (3.922f * 150.0f)) * 0.981517f;
     measurements->iu = iu_adc_v * 4.8823f;
-    measurements->u_uv =((uuv_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (4.0f * 150.0f)) * 0.9829186f;
+    measurements->u_uv =((uuv_adc_v * ((39.0f / 2.0f) * 1000.0f)) / (4.0f * 150.0f)) * 0.9896001f;
     measurements->vdc = LowPass_Update(
         &vdc_filter, InverterSampling_ConvertVdc((float)vdc_raw));
     measurements->vdc_raw = (uint16_t)vdc_raw;

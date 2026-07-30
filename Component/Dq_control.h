@@ -26,6 +26,9 @@ typedef struct
     float vll_ref_rms;
     float voltage_kp;
     float voltage_ki;
+    float voltage_compensation_offset_v;
+    float voltage_compensation_slope_v_per_a;
+    uint8_t voltage_compensation_enabled;
 } InverterConfig;
 
 typedef struct
@@ -54,6 +57,8 @@ typedef struct
 {
     float vd;
     float vq;
+    float voltage_d_integral;
+    float voltage_q_integral;
     float ud;
     float uq;
     uint8_t voltage_limited;

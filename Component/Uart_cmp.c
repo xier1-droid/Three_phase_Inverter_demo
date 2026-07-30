@@ -131,20 +131,106 @@ static void cmd_vref(float v)
 static void cmd_vstat(float v)
 {
     InverterStatus status;
-    float vll_feedback_rms;
+    float vll_instantaneous_rms;
+    float vll_fundamental_rms = 0.0f;
+    float u_uv_rms = 0.0f;
+    float u_vw_rms = 0.0f;
+    float u_wu_rms = 0.0f;
 
     (void)v;
     Inverter_GetStatus(&status);
-    /* Keep this diagnostic sqrtf outside the 20 kHz control ISR. */
-    vll_feedback_rms = sqrtf(status.vd * status.vd + status.vq * status.vq)
-                       * 1.224744871f;
+    /* Keep diagnostic square roots outside the 20 kHz control ISR. */
+    vll_instantaneous_rms =
+        sqrtf(status.vd * status.vd + status.vq * status.vq)
+        * 1.224744871f;
+    if (status.cycle_diagnostic_valid != 0U)
+    {
+        vll_fundamental_rms =
+            sqrtf(status.vd_cycle_average * status.vd_cycle_average
+                  + status.vq_cycle_average * status.vq_cycle_average)
+            * 1.224744871f;
+        u_uv_rms = sqrtf(status.u_uv_cycle_mean_square);
+        u_vw_rms = sqrtf(status.u_vw_cycle_mean_square);
+        u_wu_rms = sqrtf(status.u_wu_cycle_mean_square);
+    }
 
     my_printf(&huart1,
-              "vll_ref=%.3f vd_ref=%.3f vd=%.3f vq=%.3f "
-              "vll_fb=%.3f ud=%.3f uq=%.3f kp=%.4f ki=%.4f\r\n",
+              "ref=%.3f vd_ref=%.3f vd=%.3f vq=%.3f vll_inst=%.3f "
+              "vd_avg=%.3f vq_avg=%.3f vll_fund=%.3f "
+              "uuv=%.3f uvw=%.3f uwu=%.3f d_int=%.3f q_int=%.3f "
+              "ud=%.3f uq=%.3f kp=%.4f ki=%.4f lim=%u valid=%u\r\n",
               status.config.vll_ref_rms, status.vd_ref, status.vd, status.vq,
-              vll_feedback_rms, status.ud, status.uq,
-              status.config.voltage_kp, status.config.voltage_ki);
+              vll_instantaneous_rms, status.vd_cycle_average,
+              status.vq_cycle_average, vll_fundamental_rms,
+              u_uv_rms, u_vw_rms, u_wu_rms,
+              status.voltage_d_integral, status.voltage_q_integral,
+              status.ud, status.uq, status.config.voltage_kp,
+              status.config.voltage_ki,
+              (unsigned int)status.voltage_limited,
+              (unsigned int)status.cycle_diagnostic_valid);
+}
+
+static void cmd_istat(float v)
+{
+    InverterStatus status;
+    float iu_rms = 0.0f;
+    float iv_rms = 0.0f;
+    float iw_rms = 0.0f;
+
+    (void)v;
+    Inverter_GetStatus(&status);
+    if (status.cycle_diagnostic_valid != 0U)
+    {
+        iu_rms = sqrtf(status.iu_cycle_mean_square);
+        iv_rms = sqrtf(status.iv_cycle_mean_square);
+        iw_rms = sqrtf(status.iw_cycle_mean_square);
+    }
+
+    my_printf(&huart1,
+              "iu=%.3f iv=%.3f iw=%.3f iload=%.3f "
+              "target=%.3f applied=%.3f effective_ref=%.3f "
+              "en=%u offset=%.3f slope=%.3f valid=%u\r\n",
+              iu_rms, iv_rms, iw_rms, status.load_current_rms,
+              status.voltage_compensation_target_v,
+              status.voltage_compensation_applied_v,
+              status.effective_vll_ref_rms,
+              (unsigned int)status.config.voltage_compensation_enabled,
+              status.config.voltage_compensation_offset_v,
+              status.config.voltage_compensation_slope_v_per_a,
+              (unsigned int)status.cycle_diagnostic_valid);
+}
+
+static void cmd_vcomp_status(void)
+{
+    InverterStatus status;
+
+    Inverter_GetStatus(&status);
+    my_printf(&huart1,
+              "vcomp: en=%u offset=%.3fV slope=%.3fV/A "
+              "target=%.3fV applied=%.3fV\r\n",
+              (unsigned int)status.config.voltage_compensation_enabled,
+              status.config.voltage_compensation_offset_v,
+              status.config.voltage_compensation_slope_v_per_a,
+              status.voltage_compensation_target_v,
+              status.voltage_compensation_applied_v);
+}
+
+static void cmd_vce(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VCOMP_ENABLE, v);
+    cmd_vcomp_status();
+}
+
+static void cmd_vco(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VCOMP_OFFSET, v);
+    cmd_vcomp_status();
+}
+
+static void cmd_vck(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VCOMP_SLOPE, v);
+    cmd_vcomp_status();
 }
 
 static void cmd_wave8(float v)
@@ -174,6 +260,10 @@ static const uart_cmd_t uart_cmds[] =
     {"vi", cmd_vi},
     {"vref", cmd_vref},
     {"vstat", cmd_vstat},
+    {"istat", cmd_istat},
+    {"vce", cmd_vce},
+    {"vco", cmd_vco},
+    {"vck", cmd_vck},
     {"wave8", cmd_wave8},
     {"clrfault", cmd_clrfault},
     {"jf", cmd_jf},
