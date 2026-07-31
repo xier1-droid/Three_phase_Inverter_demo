@@ -82,6 +82,17 @@ static void ToggleVoltageCompensation(void)
 	(void)Inverter_SetParameter(INVERTER_PARAMETER_VCOMP_ENABLE, enabled);
 }
 
+static void ToggleFrequencyCompensation(void)
+{
+	InverterStatus status;
+	float enabled;
+
+	Inverter_GetStatus(&status);
+	enabled = (status.config.frequency_compensation_enabled != 0U)
+	          ? 0.0f : 1.0f;
+	(void)Inverter_SetParameter(INVERTER_PARAMETER_FCOMP_ENABLE, enabled);
+}
+
 void Key_task(void)
 {
 	Key_State key;
@@ -119,6 +130,10 @@ void Key_task(void)
 
 		case KEY6_PRESS:
 			ToggleVoltageCompensation();
+			break;
+
+		case KEY6_LONG_PRESS:
+			ToggleFrequencyCompensation();
 			break;
 
 		default:

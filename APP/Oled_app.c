@@ -47,7 +47,12 @@ void OLED_DisplayStatus(void)
     (void)snprintf(lines[1], sizeof(lines[1]),
                    "FREQ: %4.1fHz", status.actual_frequency_hz);
     (void)snprintf(lines[2], sizeof(lines[2]),
-                   "TARGET: %2.0fHz", status.target_frequency_hz);
+                   "TARGET:%2.0fHz F%cL%c",
+                   status.target_frequency_hz,
+                   (status.config.frequency_compensation_enabled != 0U)
+                   ? '+' : '-',
+                   (status.config.voltage_compensation_enabled != 0U)
+                   ? '+' : '-');
     if (status.cycle_diagnostic_valid != 0U)
     {
         measured_vll_rms = sqrtf(
