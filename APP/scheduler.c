@@ -49,6 +49,28 @@ void led_task(void)
 //	pid_set_params(&PID_Voltage, P_v, I_v, 0);
 }
 
+static void AdjustVoltageReference(int32_t step_centivolts)
+{
+	InverterStatus status;
+	int32_t reference_centivolts;
+
+	Inverter_GetStatus(&status);
+	reference_centivolts =
+		(int32_t)(status.config.vll_ref_rms * 100.0f + 0.5f);
+	reference_centivolts += step_centivolts;
+	if (reference_centivolts < 0)
+	{
+		reference_centivolts = 0;
+	}
+	else if (reference_centivolts > 3400)
+	{
+		reference_centivolts = 3400;
+	}
+
+	(void)Inverter_SetParameter(INVERTER_PARAMETER_VLL_REF_RMS,
+	                            (float)reference_centivolts / 100.0f);
+}
+
 void Key_task(void)
 {
 	Key_State key;
@@ -74,6 +96,14 @@ void Key_task(void)
 
 		case KEY3_PRESS:
 			(void)Inverter_SetFrequency(60.0f);
+			break;
+
+		case KEY4_PRESS:
+			AdjustVoltageReference(-1);
+			break;
+
+		case KEY5_PRESS:
+			AdjustVoltageReference(1);
 			break;
 
 		default:

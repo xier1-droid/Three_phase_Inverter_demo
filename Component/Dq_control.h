@@ -19,7 +19,7 @@
 #define DQ_VOLTAGE_UTILIZATION            0.9f
 #define DQ_VOLTAGE_KP_MAX                 2.0f
 #define DQ_VOLTAGE_KI_MAX                 500.0f
-#define DQ_LINE_VOLTAGE_REF_MAX_V         32.0f
+#define DQ_LINE_VOLTAGE_REF_MAX_V         34.0f
 
 typedef struct
 {

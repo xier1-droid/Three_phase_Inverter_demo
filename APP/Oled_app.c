@@ -36,6 +36,7 @@ void OLED_DisplayStatus(void)
     static char previous_lines[4][OLED_LINE_LENGTH + 1U];
     InverterStatus status;
     char lines[4][OLED_LINE_LENGTH + 1U];
+    float measured_vll_rms;
     uint8_t line;
 
     Inverter_GetStatus(&status);
@@ -45,7 +46,23 @@ void OLED_DisplayStatus(void)
                    "FREQ: %4.1fHz", status.actual_frequency_hz);
     (void)snprintf(lines[2], sizeof(lines[2]),
                    "TARGET: %2.0fHz", status.target_frequency_hz);
-    lines[3][0] = '\0';
+    if (status.cycle_diagnostic_valid != 0U)
+    {
+        measured_vll_rms = sqrtf(
+            (status.u_uv_cycle_mean_square
+             + status.u_vw_cycle_mean_square
+             + status.u_wu_cycle_mean_square) / 3.0f);
+        (void)snprintf(lines[3], sizeof(lines[3]),
+                       "V:%5.2f/%5.2fV",
+                       measured_vll_rms,
+                       status.config.vll_ref_rms);
+    }
+    else
+    {
+        (void)snprintf(lines[3], sizeof(lines[3]),
+                       "V:--.--/%5.2fV",
+                       status.config.vll_ref_rms);
+    }
 
     for (line = 0U; line < 4U; line++)
     {
