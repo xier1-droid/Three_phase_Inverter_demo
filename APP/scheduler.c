@@ -14,7 +14,7 @@ static task_t scheduler_task[] =
     {
         {Key_task, 10, 0},
 				{uart_proc,20	,	0},
-				{Display_task,200,0},
+				{Display_task,500,0},
 				{led_task,500,0},
 				{uart_test,500	,	1},
 //				{adc_task,15	,	0},
@@ -71,6 +71,17 @@ static void AdjustVoltageReference(int32_t step_centivolts)
 	                            (float)reference_centivolts / 100.0f);
 }
 
+static void ToggleVoltageCompensation(void)
+{
+	InverterStatus status;
+	float enabled;
+
+	Inverter_GetStatus(&status);
+	enabled = (status.config.voltage_compensation_enabled != 0U)
+	          ? 0.0f : 1.0f;
+	(void)Inverter_SetParameter(INVERTER_PARAMETER_VCOMP_ENABLE, enabled);
+}
+
 void Key_task(void)
 {
 	Key_State key;
@@ -104,6 +115,10 @@ void Key_task(void)
 
 		case KEY5_PRESS:
 			AdjustVoltageReference(1);
+			break;
+
+		case KEY6_PRESS:
+			ToggleVoltageCompensation();
 			break;
 
 		default:

@@ -270,8 +270,8 @@ void Inverter_Init(void)
     memset(&measurements, 0, sizeof(measurements));
 
     inverter_config.vll_ref_rms = 32.00f;
-    inverter_config.voltage_kp = 0.028f;
-    inverter_config.voltage_ki = 0.008f;
+    inverter_config.voltage_kp = 0.025f;
+    inverter_config.voltage_ki = 0.006f;
     inverter_config.voltage_compensation_offset_v = VCOMP_DEFAULT_OFFSET_V;
     inverter_config.voltage_compensation_slope_v_per_a =
         VCOMP_DEFAULT_SLOPE_V_PER_A;

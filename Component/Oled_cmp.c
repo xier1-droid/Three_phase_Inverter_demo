@@ -10,6 +10,64 @@
 static uint32_t us_ticks = 0;
 extern const uint8_t OLED_F8x16[][16];
 
+static void OLED_WriteBytes(uint8_t control,
+                            const uint8_t *data,
+                            uint16_t length)
+{
+	uint16_t index;
+
+	OLED_I2C_Start();
+	OLED_I2C_SendByte(0x78);
+	OLED_I2C_SendByte(control);
+	for (index = 0U; index < length; index++)
+	{
+		OLED_I2C_SendByte(data[index]);
+	}
+	OLED_I2C_Stop();
+}
+
+static void OLED_WriteZeroPage(void)
+{
+	uint8_t index;
+
+	OLED_I2C_Start();
+	OLED_I2C_SendByte(0x78);
+	OLED_I2C_SendByte(0x40);
+	for (index = 0U; index < 128U; index++)
+	{
+		OLED_I2C_SendByte(0x00);
+	}
+	OLED_I2C_Stop();
+}
+
+static void OLED_WriteStringPage(uint8_t page,
+	                              uint8_t column,
+	                              const char *string,
+	                              uint8_t character_count,
+	                              uint8_t font_offset)
+{
+	uint8_t character_index;
+	uint8_t byte_index;
+
+	OLED_SetCursor(page, (uint8_t)(column * 8U));
+	OLED_I2C_Start();
+	OLED_I2C_SendByte(0x78);
+	OLED_I2C_SendByte(0x40);
+	for (character_index = 0U;
+	     character_index < character_count;
+	     character_index++)
+	{
+		const uint8_t *glyph =
+			OLED_F8x16[(uint8_t)string[character_index] - (uint8_t)' '];
+
+		for (byte_index = 0U; byte_index < 8U; byte_index++)
+		{
+			OLED_I2C_SendByte(glyph[font_offset + byte_index]);
+		}
+	}
+	OLED_I2C_Stop();
+}
+
 /**
  * @brief  初始化微秒延时函数（必须在HAL初始化后调用）
  * @param  无
@@ -121,11 +179,7 @@ void OLED_I2C_SendByte(uint8_t Byte)
   */
 void OLED_WriteCommand(uint8_t Command)
 {
-	OLED_I2C_Start();
-	OLED_I2C_SendByte(0x78);		//从机地址
-	OLED_I2C_SendByte(0x00);		//写命令
-	OLED_I2C_SendByte(Command); 
-	OLED_I2C_Stop();
+	OLED_WriteBytes(0x00, &Command, 1U);
 }
 
 /**
@@ -135,11 +189,7 @@ void OLED_WriteCommand(uint8_t Command)
   */
 void OLED_WriteData(uint8_t Data)
 {
-	OLED_I2C_Start();
-	OLED_I2C_SendByte(0x78);		//从机地址
-	OLED_I2C_SendByte(0x40);		//写数据
-	OLED_I2C_SendByte(Data);
-	OLED_I2C_Stop();
+	OLED_WriteBytes(0x40, &Data, 1U);
 }
 
 /**
@@ -150,9 +200,12 @@ void OLED_WriteData(uint8_t Data)
   */
 void OLED_SetCursor(uint8_t Y, uint8_t X)
 {
-	OLED_WriteCommand(0xB0 | Y);					//设置Y位置
-	OLED_WriteCommand(0x10 | ((X & 0xF0) >> 4));	//设置X位置高4位
-	OLED_WriteCommand(0x00 | (X & 0x0F));			//设置X位置低4位
+	uint8_t commands[3];
+
+	commands[0] = (uint8_t)(0xB0U | Y);
+	commands[1] = (uint8_t)(0x10U | ((X & 0xF0U) >> 4));
+	commands[2] = (uint8_t)(X & 0x0FU);
+	OLED_WriteBytes(0x00, commands, 3U);
 }
 
 /**
@@ -162,15 +215,11 @@ void OLED_SetCursor(uint8_t Y, uint8_t X)
   */
 void OLED_Clear(void)
 {  
-	uint8_t i, j;
+	uint8_t j;
 	for (j = 0; j < 8; j++)
 	{
 		OLED_SetCursor(j, 0);
-
-		for(i = 0; i < 128; i++)
-		{
-			OLED_WriteData(0x00);
-		}
+		OLED_WriteZeroPage();
 	}
 }
 
@@ -182,18 +231,11 @@ void OLED_Clear(void)
   * @retval 无
   */
 void OLED_ShowChar(uint8_t Column, uint8_t Line, char Char)
-{      	
-	uint8_t i;
-	OLED_SetCursor((Line ) * 2, (Column ) * 8);		//设置光标位置在上半部分
-	for (i = 0; i < 8; i++)
-	{
-		OLED_WriteData(OLED_F8x16[Char - ' '][i]);			//显示上半部分内容
-	}
-	OLED_SetCursor((Line ) * 2 + 1, (Column ) * 8);	//设置光标位置在下半部分
-	for (i = 0; i < 8; i++)
-	{
-		OLED_WriteData(OLED_F8x16[Char - ' '][i + 8]);		//显示下半部分内容
-	}
+{
+	OLED_WriteStringPage((uint8_t)(Line * 2U),
+	                     Column, &Char, 1U, 0U);
+	OLED_WriteStringPage((uint8_t)(Line * 2U + 1U),
+	                     Column, &Char, 1U, 8U);
 }
 
 /**
@@ -205,11 +247,29 @@ void OLED_ShowChar(uint8_t Column, uint8_t Line, char Char)
   */
 void OLED_ShowString(uint8_t Column, uint8_t Line, char *String,	...)
 {
-	uint8_t i;
-	for (i = 0; String[i] != '\0'; i++)
+	uint8_t character_count = 0U;
+	uint8_t maximum_characters;
+
+	if ((String == NULL) || (Column >= 16U) || (Line >= 4U))
 	{
-		OLED_ShowChar(Column + i, Line, String[i]);
+		return;
 	}
+
+	maximum_characters = (uint8_t)(16U - Column);
+	while ((character_count < maximum_characters) &&
+	       (String[character_count] != '\0'))
+	{
+		character_count++;
+	}
+	if (character_count == 0U)
+	{
+		return;
+	}
+
+	OLED_WriteStringPage((uint8_t)(Line * 2U),
+	                     Column, String, character_count, 0U);
+	OLED_WriteStringPage((uint8_t)(Line * 2U + 1U),
+	                     Column, String, character_count, 8U);
 }
 
 /**

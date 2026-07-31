@@ -37,9 +37,14 @@ void OLED_DisplayStatus(void)
     InverterStatus status;
     char lines[4][OLED_LINE_LENGTH + 1U];
     float measured_vll_rms;
+    float displayed_vll_ref_rms;
     uint8_t line;
 
     Inverter_GetStatus(&status);
+    displayed_vll_ref_rms =
+        (status.config.voltage_compensation_enabled != 0U)
+        ? status.effective_vll_ref_rms
+        : status.config.vll_ref_rms;
     (void)snprintf(lines[0], sizeof(lines[0]),
                    "OUTPUT: %s", OLED_GetStateText(status.run_state));
     (void)snprintf(lines[1], sizeof(lines[1]),
@@ -55,13 +60,13 @@ void OLED_DisplayStatus(void)
         (void)snprintf(lines[3], sizeof(lines[3]),
                        "V:%5.2f/%5.2fV",
                        measured_vll_rms,
-                       status.config.vll_ref_rms);
+                       displayed_vll_ref_rms);
     }
     else
     {
         (void)snprintf(lines[3], sizeof(lines[3]),
                        "V:--.--/%5.2fV",
-                       status.config.vll_ref_rms);
+                       displayed_vll_ref_rms);
     }
 
     for (line = 0U; line < 4U; line++)
