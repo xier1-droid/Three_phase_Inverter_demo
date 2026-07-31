@@ -13,14 +13,27 @@ typedef enum
     INVERTER_PARAMETER_VOLTAGE_KI,
     INVERTER_PARAMETER_VCOMP_ENABLE,
     INVERTER_PARAMETER_VCOMP_OFFSET,
-    INVERTER_PARAMETER_VCOMP_SLOPE
+    INVERTER_PARAMETER_VCOMP_SLOPE,
+    INVERTER_PARAMETER_FREQUENCY_HZ
 } InverterParameter;
+
+typedef enum
+{
+    INVERTER_RUN_STATE_STOP = 0,
+    INVERTER_RUN_STATE_RAMP_UP,
+    INVERTER_RUN_STATE_RUN,
+    INVERTER_RUN_STATE_RAMP_FREQ,
+    INVERTER_RUN_STATE_RAMP_DOWN
+} InverterRunState;
 
 typedef struct
 {
     uint8_t mode;
     uint8_t running;
     uint8_t fault_latched;
+    InverterRunState run_state;
+    float target_frequency_hz;
+    float actual_frequency_hz;
     float vdc;
     float vd_ref;
     float vd;
@@ -48,6 +61,7 @@ typedef struct
 
 void Inverter_Init(void);
 bool Inverter_SetParameter(InverterParameter parameter, float value);
+bool Inverter_SetFrequency(float frequency_hz);
 void Inverter_GetStatus(InverterStatus *status);
 
 void Inverter_Wave_Start_TIM8(void);

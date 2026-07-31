@@ -128,6 +128,22 @@ static void cmd_vref(float v)
               status.config.vll_ref_rms);
 }
 
+static void cmd_freq(float v)
+{
+    InverterStatus status;
+
+    if (!Inverter_SetFrequency(v))
+    {
+        my_printf(&huart1, "freq must be 30 or 60 Hz\r\n");
+        return;
+    }
+
+    Inverter_GetStatus(&status);
+    my_printf(&huart1, "freq target=%.1f actual=%.1f Hz\r\n",
+              status.target_frequency_hz,
+              status.actual_frequency_hz);
+}
+
 static void cmd_vstat(float v)
 {
     InverterStatus status;
@@ -259,6 +275,7 @@ static const uart_cmd_t uart_cmds[] =
     {"vp", cmd_vp},
     {"vi", cmd_vi},
     {"vref", cmd_vref},
+    {"freq", cmd_freq},
     {"vstat", cmd_vstat},
     {"istat", cmd_istat},
     {"vce", cmd_vce},

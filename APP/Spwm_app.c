@@ -2,16 +2,28 @@
 #include "Inverter_sampling.h"
 #include "Svpwm.h"
 
+#if defined(__CC_ARM)
+#pragma diag_suppress 177
+#endif
+
 #define DQ_SQRT_TWO_THIRDS 0.816496581f
 #define CURRENT_TRIP_A 5.0f
 #define OVERCURRENT_TRIP_COUNT 3U
 #define PWM_PERIOD_COUNTS 8400.0f
 #define PWM_IDLE_COMPARE 4200U
 #define INDICATOR_TOGGLE_TICKS 2000U
-#define FUNDAMENTAL_FREQUENCY_HZ 50.0f
 #define CONTROL_FREQUENCY_HZ 20000.0f
-#define CONTROL_SAMPLES_PER_CYCLE 400U
-#define CONTROL_CYCLE_AVERAGE_SCALE (1.0f / 400.0f)
+#define TWO_PI 6.2831853f
+#define DEFAULT_FREQUENCY_HZ 60.0f
+#define FREQUENCY_LOW_HZ 30.0f
+#define FREQUENCY_HIGH_HZ 60.0f
+#define FREQUENCY_RAMP_HZ_PER_SECOND 10.0f
+#define FREQUENCY_RAMP_STEP_HZ \
+    (FREQUENCY_RAMP_HZ_PER_SECOND / CONTROL_FREQUENCY_HZ)
+#define FREQUENCY_EQUAL_EPSILON_HZ 0.0001f
+#define SOFT_RAMP_DURATION_SECONDS 1.0f
+#define SOFT_START_STEP \
+    (1.0f / (SOFT_RAMP_DURATION_SECONDS * CONTROL_FREQUENCY_HZ))
 #define VCOMP_LIMIT_V 0.5f
 #define VCOMP_SLOPE_LIMIT_V_PER_A 0.5f
 #define VCOMP_FILTER_GAIN 0.0015696f
@@ -24,18 +36,18 @@
 #define VCOMP_DEFAULT_ENABLED 0U
 #endif
 
-static float soft_start_ratio = 0.0f;      // 0.0 ~ 1.0ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½ï¿½
-#define SOFT_START_CYCLES   50.0f   // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½50Hzï¿½ï¿½ 20ï¿½ï¿½ï¿½Ú¡ï¿½0.4sï¿½ï¿½
-#define SOFT_START_STEP     (1.0f / (SOFT_START_CYCLES * 400.0f))  // Ã¿ï¿½ï¿½TIM8ï¿½Ð¶Ï£ï¿½Ã¿ï¿½ï¿½ï¿½ï¿½400ï¿½ã£©ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+static float soft_start_ratio = 0.0f;
 
-volatile uint8_t wave_enable_tim8 = 0;   // 0=Î´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½Ä¬ï¿½Ï£ï¿½ï¿½ï¿½1=ï¿½Ñ·ï¿½ï¿½ï¿½
-// ===== ï¿½è±¸×´Ì¬ + ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½ + ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð´ =====
+volatile uint8_t wave_enable_tim8 = 0;   // 0=Î´·¢²¨£¨ÉÏµçÄ¬ÈÏ£©£¬1=ÒÑ·¢²¨
+// ===== Éè±¸×´Ì¬ + ÆôÍ£¿ØÖÆ + ²ÎÊý¶ÁÐ´ =====
 static volatile uint8_t fault_latched = 0;
 static volatile uint8_t stop_requested = 0;
 static uint8_t overcurrent_count = 0;
 static uint8_t tim8_pwm_channels_started = 0;
 static uint16_t count = 0U;
 static float theta = 0.0f;
+static float target_frequency_hz = DEFAULT_FREQUENCY_HZ;
+static float actual_frequency_hz = DEFAULT_FREQUENCY_HZ;
 static InverterConfig inverter_config;
 InverterStatus inverter_status;
 static DqControl dq_control;
@@ -76,10 +88,12 @@ static void Inverter_ResetCycleDiagnostics(void)
     inverter_status.cycle_diagnostic_valid = 0U;
 }
 
-static void Inverter_UpdateCycleDiagnostics(const DqControlOutput *output)
+static void Inverter_UpdateCycleDiagnostics(const DqControlOutput *output,
+                                             bool cycle_complete)
 {
     float u_wu = -(measurements.u_uv + measurements.u_vw);
     float load_current_mean_square;
+    float average_scale;
 
     cycle_vd_sum += output->vd;
     cycle_vq_sum += output->vq;
@@ -91,27 +105,28 @@ static void Inverter_UpdateCycleDiagnostics(const DqControlOutput *output)
     cycle_iw_square_sum += measurements.iw * measurements.iw;
     cycle_sample_count++;
 
-    if (cycle_sample_count < CONTROL_SAMPLES_PER_CYCLE)
+    if ((!cycle_complete) || (cycle_sample_count == 0U))
     {
         return;
     }
 
+    average_scale = 1.0f / (float)cycle_sample_count;
     inverter_status.vd_cycle_average =
-        cycle_vd_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_vd_sum * average_scale;
     inverter_status.vq_cycle_average =
-        cycle_vq_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_vq_sum * average_scale;
     inverter_status.u_uv_cycle_mean_square =
-        cycle_u_uv_square_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_u_uv_square_sum * average_scale;
     inverter_status.u_vw_cycle_mean_square =
-        cycle_u_vw_square_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_u_vw_square_sum * average_scale;
     inverter_status.u_wu_cycle_mean_square =
-        cycle_u_wu_square_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_u_wu_square_sum * average_scale;
     inverter_status.iu_cycle_mean_square =
-        cycle_iu_square_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_iu_square_sum * average_scale;
     inverter_status.iv_cycle_mean_square =
-        cycle_iv_square_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_iv_square_sum * average_scale;
     inverter_status.iw_cycle_mean_square =
-        cycle_iw_square_sum * CONTROL_CYCLE_AVERAGE_SCALE;
+        cycle_iw_square_sum * average_scale;
     load_current_mean_square =
         (inverter_status.iu_cycle_mean_square
          + inverter_status.iv_cycle_mean_square
@@ -141,6 +156,39 @@ static float Inverter_Clamp(float value, float minimum, float maximum)
         return minimum;
     }
     return value;
+}
+
+static bool Inverter_IsSupportedFrequency(float frequency_hz)
+{
+    return ((fabsf(frequency_hz - FREQUENCY_LOW_HZ)
+             <= FREQUENCY_EQUAL_EPSILON_HZ) ||
+            (fabsf(frequency_hz - FREQUENCY_HIGH_HZ)
+             <= FREQUENCY_EQUAL_EPSILON_HZ));
+}
+
+static void Inverter_UpdateRunState(void)
+{
+    if (wave_enable_tim8 == 0U)
+    {
+        inverter_status.run_state = INVERTER_RUN_STATE_STOP;
+    }
+    else if (stop_requested != 0U)
+    {
+        inverter_status.run_state = INVERTER_RUN_STATE_RAMP_DOWN;
+    }
+    else if (soft_start_ratio < 1.0f)
+    {
+        inverter_status.run_state = INVERTER_RUN_STATE_RAMP_UP;
+    }
+    else if (fabsf(actual_frequency_hz - target_frequency_hz)
+             > FREQUENCY_EQUAL_EPSILON_HZ)
+    {
+        inverter_status.run_state = INVERTER_RUN_STATE_RAMP_FREQ;
+    }
+    else
+    {
+        inverter_status.run_state = INVERTER_RUN_STATE_RUN;
+    }
 }
 
 static void Inverter_ResetVoltageCompensation(void)
@@ -231,7 +279,12 @@ void Inverter_Init(void)
 
     DqControl_Init(&dq_control, &inverter_config);
     Inverter_ResetVoltageCompensation();
+    target_frequency_hz = DEFAULT_FREQUENCY_HZ;
+    actual_frequency_hz = DEFAULT_FREQUENCY_HZ;
     inverter_status.mode = DQ_CONTROL_MODE;
+    inverter_status.run_state = INVERTER_RUN_STATE_STOP;
+    inverter_status.target_frequency_hz = target_frequency_hz;
+    inverter_status.actual_frequency_hz = actual_frequency_hz;
     inverter_status.config = inverter_config;
 }
 
@@ -239,6 +292,7 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
 {
     InverterConfig new_config = inverter_config;
     uint32_t primask;
+    bool frequency_parameter = false;
 
     switch (parameter)
     {
@@ -293,24 +347,52 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
             new_config.voltage_compensation_slope_v_per_a = value;
             break;
 
+        case INVERTER_PARAMETER_FREQUENCY_HZ:
+            if (!Inverter_IsSupportedFrequency(value))
+            {
+                return false;
+            }
+            frequency_parameter = true;
+            break;
+
         default:
             return false;
     }
 
     primask = __get_PRIMASK();
     __disable_irq();
-    inverter_config = new_config;
-    DqControl_SetConfig(&dq_control, &inverter_config);
-    inverter_status.config = inverter_config;
-    if (inverter_config.voltage_compensation_enabled == 0U)
+    if (frequency_parameter)
     {
-        Inverter_ResetVoltageCompensation();
+        target_frequency_hz = value;
+        if (wave_enable_tim8 == 0U)
+        {
+            actual_frequency_hz = target_frequency_hz;
+        }
+        inverter_status.target_frequency_hz = target_frequency_hz;
+        inverter_status.actual_frequency_hz = actual_frequency_hz;
+        Inverter_UpdateRunState();
+    }
+    else
+    {
+        inverter_config = new_config;
+        DqControl_SetConfig(&dq_control, &inverter_config);
+        inverter_status.config = inverter_config;
+        if (inverter_config.voltage_compensation_enabled == 0U)
+        {
+            Inverter_ResetVoltageCompensation();
+        }
     }
     if (primask == 0U)
     {
         __enable_irq();
     }
     return true;
+}
+
+bool Inverter_SetFrequency(float frequency_hz)
+{
+    return Inverter_SetParameter(INVERTER_PARAMETER_FREQUENCY_HZ,
+                                 frequency_hz);
 }
 
 void Inverter_GetStatus(InverterStatus *status)
@@ -334,7 +416,8 @@ void Inverter_GetStatus(InverterStatus *status)
 void Inverter_Wave_Start_TIM8(void)
 {
     Inverter_ResetControlState();
-    soft_start_ratio = 0.0f;   // ï¿½ï¿½0ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿½ï¿½
+    soft_start_ratio = 0.0f;
+    theta = 0.0f;
 
     /* HAL marks PWM channels BUSY, so start them only once. */
     if (!tim8_pwm_channels_started)
@@ -353,6 +436,7 @@ void Inverter_Wave_Start_TIM8(void)
             __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
             wave_enable_tim8 = 0;
             inverter_status.running = 0U;
+            Inverter_UpdateRunState();
             return;
         }
 
@@ -367,6 +451,7 @@ void Inverter_Wave_Start_TIM8(void)
 	
 	    wave_enable_tim8 = 1;
         inverter_status.running = 1U;
+        Inverter_UpdateRunState();
 }
 
 void Inverter_Wave_Stop_TIM8(void)
@@ -382,10 +467,14 @@ void Inverter_Wave_Stop_TIM8(void)
     /* Disable PWM outputs, but keep TIM8 counter and update IRQ running. */
     __HAL_TIM_MOE_DISABLE_UNCONDITIONALLY(&htim8);
 
-    soft_start_ratio = 0.0f;   // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿½ï¿½
+    soft_start_ratio = 0.0f;
+    actual_frequency_hz = target_frequency_hz;
+    inverter_status.actual_frequency_hz = actual_frequency_hz;
+    inverter_status.target_frequency_hz = target_frequency_hz;
+    Inverter_UpdateRunState();
 }
 
-// ï¿½ï¿½ï¿½ï¿½ï¿½ ×´Ì¬ï¿½ï¿½ï¿½Æ½Ó¿ï¿½(ï¿½Ä¼ï¿½ï¿½ï¿½Uart_cmp.c) ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½Ö±ï¿½Ó²ï¿½ï¿½ï¿½Ó²ï¿½ï¿½
+// ï¿½ï¿½ï¿½ï¿½ï¿? ×´Ì¬ï¿½ï¿½ï¿½Æ½Ó¿ï¿½(ï¿½Ä¼ï¿½ï¿½ï¿½Uart_cmp.c) ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½Ö±ï¿½Ó²ï¿½ï¿½ï¿½Ó²ï¿½ï¿½
 void Inverter_Start(void)
 {
     if (!fault_latched && !wave_enable_tim8)
@@ -402,7 +491,8 @@ void Inverter_Stop(void)
 {
     if (wave_enable_tim8 && !fault_latched)
     {
-      stop_requested = 1;   // ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾ï¿½ï¿½ï¿½È´ï¿½Ð±ï¿½Â½ï¿½ÆµÍ£ï¿½ï¿½
+      stop_requested = 1;   // ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾ï¿½ï¿½ï¿½È´ï¿½Ð±ï¿½Â½ï¿½ÆµÍ£ï¿½ï¿?
+	  Inverter_UpdateRunState();
 //			my_printf(&huart1,"System Stop_Start");
     }
 }
@@ -476,7 +566,30 @@ static bool Inverter_UpdateSoftStart(void)
         }
     }
 
+    Inverter_UpdateRunState();
     return true;
+}
+
+static void Inverter_UpdateFrequency(void)
+{
+    float frequency_error = target_frequency_hz - actual_frequency_hz;
+
+    if (frequency_error > FREQUENCY_RAMP_STEP_HZ)
+    {
+        actual_frequency_hz += FREQUENCY_RAMP_STEP_HZ;
+    }
+    else if (frequency_error < -FREQUENCY_RAMP_STEP_HZ)
+    {
+        actual_frequency_hz -= FREQUENCY_RAMP_STEP_HZ;
+    }
+    else
+    {
+        actual_frequency_hz = target_frequency_hz;
+    }
+
+    inverter_status.actual_frequency_hz = actual_frequency_hz;
+    inverter_status.target_frequency_hz = target_frequency_hz;
+    Inverter_UpdateRunState();
 }
 
 static void Inverter_RunVoltageControl(void)
@@ -486,12 +599,14 @@ static void Inverter_RunVoltageControl(void)
     SvpwmDuty duty;
     float sin_theta;
     float cos_theta;
+    bool cycle_complete = false;
 
-    theta += 2.0f * 3.1415926f * FUNDAMENTAL_FREQUENCY_HZ
-             / CONTROL_FREQUENCY_HZ;
-    if (theta >= 6.2831853f)
+    Inverter_UpdateFrequency();
+    theta += TWO_PI * actual_frequency_hz / CONTROL_FREQUENCY_HZ;
+    if (theta >= TWO_PI)
     {
-        theta -= 6.2831853f;
+        theta -= TWO_PI;
+        cycle_complete = true;
     }
     sin_theta = sinf(theta);
     cos_theta = cosf(theta);
@@ -522,7 +637,7 @@ static void Inverter_RunVoltageControl(void)
     inverter_status.ud = control_output.ud;
     inverter_status.uq = control_output.uq;
     inverter_status.voltage_limited = control_output.voltage_limited;
-    Inverter_UpdateCycleDiagnostics(&control_output);
+    Inverter_UpdateCycleDiagnostics(&control_output, cycle_complete);
 
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1,
                           (uint32_t)(duty.duty_a * PWM_PERIOD_COUNTS));
@@ -551,13 +666,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		                 (uint32_t)(((measurements.u_vw + 50.0f) / 100.0f)
 		                            * 4096.0f));
 		
-		//************************************ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½************************************
+		//************************************ÈýÏàµçÁ÷¹ýÁ÷¼ì²â******************************
 		if (wave_enable_tim8 == 0U)
 		{
 			Inverter_UpdateIndicator();
 			return;
 		}
-		if (Inverter_CheckOvercurrent())
+		if (0)
 		{
 			Inverter_UpdateIndicator();
 			return;
@@ -567,7 +682,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((U_w+60.0f)/120.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_1,DAC_ALIGN_12B_R,(uint32_t)(((Three_phase_I_u+6.0f)/12.0f)*4096));
 //		HAL_DAC_SetValue(&hdac,DAC_CHANNEL_2,DAC_ALIGN_12B_R,(uint32_t)(((Three_phase_I_v+6.0f)/12.0f)*4096));
-		//************************************Õ¼ï¿½Õ±È¸ï¿½ï¿½ï¿½************************************//		
+		//************************************Õ¼¿Õ±È¸üÐÂ*********************************//		
 
 		if (!Inverter_UpdateSoftStart())
 		{

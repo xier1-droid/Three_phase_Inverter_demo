@@ -12,9 +12,10 @@ typedef struct // 任务结构体定义
 // 系统任务列表，定义所有需要调度的任务及其执行周期
 static task_t scheduler_task[] =
     {
-        {led_task, 500, 0},      // LED控制任务，1ms周期
+        {Key_task, 10, 0},
 				{uart_proc,20	,	0},
-				{Display_task,50,0},
+				{Display_task,200,0},
+				{led_task,500,0},
 				{uart_test,500	,	1},
 //				{adc_task,15	,	0},
 			
@@ -48,9 +49,41 @@ void led_task(void)
 //	pid_set_params(&PID_Voltage, P_v, I_v, 0);
 }
 
+void Key_task(void)
+{
+	Key_State key;
+
+	KEY_Scan();
+	key = KEY_GetState();
+	switch (key)
+	{
+		case KEY1_PRESS:
+			if (wave_enable_tim8 != 0U)
+			{
+				Inverter_Stop();
+			}
+			else
+			{
+				Inverter_Start();
+			}
+			break;
+
+		case KEY2_PRESS:
+			(void)Inverter_SetFrequency(30.0f);
+			break;
+
+		case KEY3_PRESS:
+			(void)Inverter_SetFrequency(60.0f);
+			break;
+
+		default:
+			break;
+	}
+}
+
 void Display_task(void)
 {
-//	show_memu();
+	OLED_DisplayStatus();
 }
 
 void uart_test(void)

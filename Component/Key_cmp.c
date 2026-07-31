@@ -1,66 +1,71 @@
 #include "Key_cmp.h"
 
-// 全局变量：保存按键状态（volatile确保编译器不优化）
-volatile Key_State g_key_state = KEY_NONE;
-volatile uint8_t g_key_flag = 0;
-/**
- * @brief  外部中断回调函数（HAL库统一入口，需重写）
- * @param  GPIO_Pin: 触发中断的引脚
- */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+#define KEY_COUNT 6U
+#define KEY_DEBOUNCE_SAMPLES 3U
+
+static const uint16_t key_pins[KEY_COUNT] =
 {
-//    delay_us(10000);//!!!!!
-    
-    // 确认引脚确实为高电平（上升沿触发，按键按下后电平变化）
-    if(HAL_GPIO_ReadPin(GPIOE, GPIO_Pin) == GPIO_PIN_RESET)
+    GPIO_PIN_1,
+    GPIO_PIN_2,
+    GPIO_PIN_3,
+    GPIO_PIN_4,
+    GPIO_PIN_5,
+    GPIO_PIN_6
+};
+
+static uint8_t stable_pressed[KEY_COUNT];
+static uint8_t debounce_count[KEY_COUNT];
+static Key_State pending_key = KEY_NONE;
+
+void KEY_Init(void)
+{
+    uint8_t index;
+
+    pending_key = KEY_NONE;
+    for (index = 0U; index < KEY_COUNT; index++)
     {
-			__disable_irq();
-        switch(GPIO_Pin)
-        {
-            case GPIO_PIN_1:
-                g_key_state = KEY1_PRESS;
-                break;
-            case GPIO_PIN_2:
-                g_key_state = KEY2_PRESS;
-                break;
-            case GPIO_PIN_3:
-                g_key_state = KEY3_PRESS;
-                break;
-            case GPIO_PIN_4:
-                g_key_state = KEY4_PRESS;
-                break;
-            case GPIO_PIN_5:
-                g_key_state = KEY5_PRESS;
-                break;
-            case GPIO_PIN_6:
-                g_key_state = KEY6_PRESS;
-                break;
-            default:
-                g_key_state = KEY_NONE;
-                break;
-        }
-				__enable_irq();
+        stable_pressed[index] =
+            (HAL_GPIO_ReadPin(GPIOE, key_pins[index]) == GPIO_PIN_RESET)
+            ? 1U : 0U;
+        debounce_count[index] = 0U;
     }
-    
-    // 清除中断标志（HAL库自动清除，可选）
-    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_Pin);
 }
 
-/**
- * @brief  获取按键状态（供主函数调用）
- * @retval 按键状态枚举
- */
+void KEY_Scan(void)
+{
+    uint8_t index;
+
+    for (index = 0U; index < KEY_COUNT; index++)
+    {
+        uint8_t sampled_pressed =
+            (HAL_GPIO_ReadPin(GPIOE, key_pins[index]) == GPIO_PIN_RESET)
+            ? 1U : 0U;
+
+        if (sampled_pressed == stable_pressed[index])
+        {
+            debounce_count[index] = 0U;
+            continue;
+        }
+
+        debounce_count[index]++;
+        if (debounce_count[index] < KEY_DEBOUNCE_SAMPLES)
+        {
+            continue;
+        }
+
+        debounce_count[index] = 0U;
+        stable_pressed[index] = sampled_pressed;
+        if ((sampled_pressed != 0U) && (pending_key == KEY_NONE))
+        {
+            pending_key = (Key_State)(KEY1_PRESS + index);
+        }
+    }
+}
+
 Key_State KEY_GetState(void)
 {
-    Key_State temp = g_key_state;
-    // 原子操作读取并清空状态
-    __disable_irq();
-    if(g_key_flag == 1)
-    {
-        temp = g_key_state;
-        g_key_state = KEY_NONE;
-        g_key_flag = 0; // 仅读取后清空标记
-    }
-    __enable_irq();
-    return temp;
+    Key_State key = pending_key;
+
+    pending_key = KEY_NONE;
+    return key;
 }

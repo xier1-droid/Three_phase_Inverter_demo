@@ -101,9 +101,9 @@ int main(void)
   MX_DAC_Init();
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
-//	Delay_Init();
-//	OLED_I2C_Init();
-//	OLED_Init();
+	Delay_Init();
+	OLED_Init();
+	KEY_Init();
 	Uart_init();
 	Inverter_Init();
 	if (!InverterSampling_Init())

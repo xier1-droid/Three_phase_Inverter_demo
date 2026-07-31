@@ -1868,6 +1868,11 @@
               <FileType>1</FileType>
               <FilePath>..\APP\Spwm_app.c</FilePath>
             </File>
+            <File>
+              <FileName>Oled_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Oled_app.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1907,6 +1912,16 @@
               <FileName>Filter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Component\Filter.c</FilePath>
+            </File>
+            <File>
+              <FileName>Oled_cmp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Component\Oled_cmp.c</FilePath>
+            </File>
+            <File>
+              <FileName>Oled_Font.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Component\Oled_Font.c</FilePath>
             </File>
           </Files>
         </Group>

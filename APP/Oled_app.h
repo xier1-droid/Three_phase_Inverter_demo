@@ -3,7 +3,7 @@
 
 #include "mydefine.h"
 
-void show_memu(void);
+void OLED_DisplayStatus(void);
 
 
 #endif
