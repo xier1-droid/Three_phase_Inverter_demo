@@ -97,24 +97,56 @@ typedef struct
     void (*handler)(float val);
 } uart_cmd_t;
 
-static void cmd_vp(float v)
+static void cmd_voltage_gain_status(void)
 {
     InverterStatus status;
 
-    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KP, v);
     Inverter_GetStatus(&status);
-    my_printf(&huart1, "DQ_Voltage: kp=%.4f ki=%.4f\r\n",
-              status.config.voltage_kp, status.config.voltage_ki);
+    my_printf(&huart1,
+              "DQ gains: kp30=%.4f ki30=%.4f kp60=%.4f ki60=%.4f "
+              "kp_eff=%.4f ki_eff=%.4f\r\n",
+              status.config.voltage_kp_30_hz,
+              status.config.voltage_ki_30_hz,
+              status.config.voltage_kp,
+              status.config.voltage_ki,
+              status.effective_voltage_kp,
+              status.effective_voltage_ki);
+}
+
+static void cmd_vp(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KP, v);
+    cmd_voltage_gain_status();
 }
 
 static void cmd_vi(float v)
 {
-    InverterStatus status;
-
     (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KI, v);
-    Inverter_GetStatus(&status);
-    my_printf(&huart1, "DQ_Voltage: kp=%.4f ki=%.4f\r\n",
-              status.config.voltage_kp, status.config.voltage_ki);
+    cmd_voltage_gain_status();
+}
+
+static void cmd_vp30(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KP_30_HZ, v);
+    cmd_voltage_gain_status();
+}
+
+static void cmd_vi30(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KI_30_HZ, v);
+    cmd_voltage_gain_status();
+}
+
+static void cmd_vp60(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KP_60_HZ, v);
+    cmd_voltage_gain_status();
+}
+
+static void cmd_vi60(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_VOLTAGE_KI_60_HZ, v);
+    cmd_voltage_gain_status();
 }
 
 static void cmd_vref(float v)
@@ -180,8 +212,8 @@ static void cmd_vstat(float v)
               status.vq_cycle_average, vll_fundamental_rms,
               u_uv_rms, u_vw_rms, u_wu_rms,
               status.voltage_d_integral, status.voltage_q_integral,
-              status.ud, status.uq, status.config.voltage_kp,
-              status.config.voltage_ki,
+              status.ud, status.uq, status.effective_voltage_kp,
+              status.effective_voltage_ki,
               (unsigned int)status.voltage_limited,
               (unsigned int)status.cycle_diagnostic_valid);
 }
@@ -249,6 +281,53 @@ static void cmd_vck(float v)
     cmd_vcomp_status();
 }
 
+static void cmd_frequency_comp_status(void)
+{
+    InverterStatus status;
+
+    Inverter_GetStatus(&status);
+    my_printf(&huart1,
+              "fcomp: en=%u f30=%.3fV f60=%.3fV "
+              "target=%.3fV applied=%.3fV "
+              "kp30=%.4f ki30=%.4f kp60=%.4f ki60=%.4f "
+              "kp_eff=%.4f ki_eff=%.4f\r\n",
+              (unsigned int)status.config.frequency_compensation_enabled,
+              status.config.frequency_compensation_30_v,
+              status.config.frequency_compensation_60_v,
+              status.frequency_compensation_target_v,
+              status.frequency_compensation_applied_v,
+              status.config.voltage_kp_30_hz,
+              status.config.voltage_ki_30_hz,
+              status.config.voltage_kp,
+              status.config.voltage_ki,
+              status.effective_voltage_kp,
+              status.effective_voltage_ki);
+}
+
+static void cmd_fce(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_FCOMP_ENABLE, v);
+    cmd_frequency_comp_status();
+}
+
+static void cmd_fc30(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_FCOMP_30_V, v);
+    cmd_frequency_comp_status();
+}
+
+static void cmd_fc60(float v)
+{
+    (void)Inverter_SetParameter(INVERTER_PARAMETER_FCOMP_60_V, v);
+    cmd_frequency_comp_status();
+}
+
+static void cmd_fcstat(float v)
+{
+    (void)v;
+    cmd_frequency_comp_status();
+}
+
 static void cmd_wave8(float v)
 {
     if (v != 0.0f)
@@ -274,6 +353,10 @@ static const uart_cmd_t uart_cmds[] =
 {
     {"vp", cmd_vp},
     {"vi", cmd_vi},
+    {"vp30", cmd_vp30},
+    {"vi30", cmd_vi30},
+    {"vp60", cmd_vp60},
+    {"vi60", cmd_vi60},
     {"vref", cmd_vref},
     {"freq", cmd_freq},
     {"vstat", cmd_vstat},
@@ -281,6 +364,10 @@ static const uart_cmd_t uart_cmds[] =
     {"vce", cmd_vce},
     {"vco", cmd_vco},
     {"vck", cmd_vck},
+    {"fce", cmd_fce},
+    {"fc30", cmd_fc30},
+    {"fc60", cmd_fc60},
+    {"fcstat", cmd_fcstat},
     {"wave8", cmd_wave8},
     {"clrfault", cmd_clrfault},
     {"jf", cmd_jf},
@@ -336,7 +423,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART1)
     {
-        uart_tx_busy = 0; // ������ɣ��ͷ�
+        uart_tx_busy = 0; // ������ɣ��ͷ�?
     }
 }
 
@@ -346,8 +433,8 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     // 1. ȷ����Ŀ�괮�� (USART1)
     if (huart->Instance == USART1)
     {
-        // 2. ����ֹͣ��ǰ�� DMA ���� (������ڽ�����)
-        //    ��Ϊ�����ж���ζ�ŷ��ͷ��Ѿ�ֹͣ����ֹ DMA �����ȴ������
+        // 2. ����ֹͣ��ǰ�� DMA ���� (������ڽ�����?
+        //    ��Ϊ�����ж���ζ�ŷ��ͷ��Ѿ�ֹͣ����ֹ DMA �����ȴ������?
         HAL_UART_DMAStop(huart);
 
         // 3. �� DMA ����������Ч������ (Size ���ֽ�) ���Ƶ�������������
@@ -357,15 +444,15 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
         // 4. ����"����֪ͨ��"��������ѭ�������ݴ�����
         uart_flag = 1;
 
-        // 5. ��� DMA ���ջ�������Ϊ�´ν�����׼��
-        //    ��Ȼ memcpy ֻ������ Size �������������������������
+        // 5. ���?DMA ���ջ�������Ϊ�´ν�����׼��
+        //    ��Ȼ memcpy ֻ������ Size �������������������������?
         memset(uart_rx_dma_buffer, 0, sizeof(uart_rx_dma_buffer));
 
         // 6. **�ؼ�������������һ�� DMA ���н���**
-        //    �����ٴε��ã�����ֻ�������һ��
+        //    �����ٴε��ã�����ֻ�������һ��?
         HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart_rx_dma_buffer, sizeof(uart_rx_dma_buffer));
         
-        // 7. ���֮ǰ�ر��˰����жϣ�������Ҫ�������ٴιر� (������Ҫ)
+        // 7. ���֮ǰ�ر��˰����жϣ�������Ҫ�������ٴιر�?(������Ҫ)
          __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
     }
 }

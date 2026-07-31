@@ -41,10 +41,7 @@ void OLED_DisplayStatus(void)
     uint8_t line;
 
     Inverter_GetStatus(&status);
-    displayed_vll_ref_rms =
-        (status.config.voltage_compensation_enabled != 0U)
-        ? status.effective_vll_ref_rms
-        : status.config.vll_ref_rms;
+    displayed_vll_ref_rms = status.effective_vll_ref_rms;
     (void)snprintf(lines[0], sizeof(lines[0]),
                    "OUTPUT: %s", OLED_GetStateText(status.run_state));
     (void)snprintf(lines[1], sizeof(lines[1]),

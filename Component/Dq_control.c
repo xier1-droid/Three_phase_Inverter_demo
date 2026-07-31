@@ -105,6 +105,15 @@ void DqControl_SetConfig(DqControl *control,
     }
 }
 
+void DqControl_SetVoltageGains(DqControl *control, float kp, float ki)
+{
+    if (control != NULL)
+    {
+        control->config.voltage_kp = kp;
+        control->config.voltage_ki = ki;
+    }
+}
+
 void DqControl_Step(DqControl *control,
                     const DqControlInput *input,
                     DqControlOutput *output)

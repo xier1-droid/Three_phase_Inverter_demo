@@ -14,7 +14,7 @@ static task_t scheduler_task[] =
     {
         {Key_task, 10, 0},
 				{uart_proc,20	,	0},
-				{Display_task,500,0},
+				{Display_task,1000,0},
 				{led_task,500,0},
 				{uart_test,500	,	1},
 //				{adc_task,15	,	0},

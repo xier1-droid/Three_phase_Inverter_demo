@@ -30,8 +30,12 @@
 #define VCOMP_EFFECTIVE_REF_MAX_V 34.5f
 #define VCOMP_DEFAULT_OFFSET_V (-0.1569f)
 #define VCOMP_DEFAULT_SLOPE_V_PER_A -0.1053f
+#define FCOMP_LIMIT_V 0.5f
+#define FCOMP_DEFAULT_30_V -0.1f
+#define FCOMP_DEFAULT_60_V -0.15f
+#define FCOMP_DEFAULT_ENABLED 1U
 #if DQ_CONTROL_MODE == DQ_VOLTAGE_LOOP
-#define VCOMP_DEFAULT_ENABLED 1U
+#define VCOMP_DEFAULT_ENABLED 0U
 #else
 #define VCOMP_DEFAULT_ENABLED 0U
 #endif
@@ -63,7 +67,11 @@ static float cycle_iw_square_sum;
 static uint16_t cycle_sample_count;
 static float voltage_compensation_target_v;
 static float voltage_compensation_applied_v;
+static float frequency_compensation_target_v;
+static float frequency_compensation_applied_v;
 static float effective_vll_ref_rms;
+static float effective_voltage_kp;
+static float effective_voltage_ki;
 
 static void Inverter_ResetCycleDiagnostics(void)
 {
@@ -191,14 +199,61 @@ static void Inverter_UpdateRunState(void)
     }
 }
 
+static float Inverter_GetFrequencyInterpolationRatio(void)
+{
+    return Inverter_Clamp(
+        (actual_frequency_hz - FREQUENCY_LOW_HZ)
+        / (FREQUENCY_HIGH_HZ - FREQUENCY_LOW_HZ),
+        0.0f,
+        1.0f);
+}
+
+static void Inverter_UpdateEffectiveVoltageReference(void)
+{
+    effective_vll_ref_rms =
+        Inverter_Clamp(inverter_config.vll_ref_rms
+                       + voltage_compensation_applied_v
+                       + frequency_compensation_applied_v,
+                       0.0f,
+                       VCOMP_EFFECTIVE_REF_MAX_V);
+    inverter_status.effective_vll_ref_rms = effective_vll_ref_rms;
+}
+
 static void Inverter_ResetVoltageCompensation(void)
 {
     voltage_compensation_target_v = 0.0f;
     voltage_compensation_applied_v = 0.0f;
-    effective_vll_ref_rms = inverter_config.vll_ref_rms;
     inverter_status.voltage_compensation_target_v = 0.0f;
     inverter_status.voltage_compensation_applied_v = 0.0f;
-    inverter_status.effective_vll_ref_rms = effective_vll_ref_rms;
+}
+
+static void Inverter_ResetFrequencyCompensation(void)
+{
+    float ratio = Inverter_GetFrequencyInterpolationRatio();
+
+    frequency_compensation_target_v = 0.0f;
+    frequency_compensation_applied_v = 0.0f;
+    if (inverter_config.frequency_compensation_enabled != 0U)
+    {
+        effective_voltage_kp = inverter_config.voltage_kp_30_hz
+            + ratio * (inverter_config.voltage_kp
+                       - inverter_config.voltage_kp_30_hz);
+        effective_voltage_ki = inverter_config.voltage_ki_30_hz
+            + ratio * (inverter_config.voltage_ki
+                       - inverter_config.voltage_ki_30_hz);
+    }
+    else
+    {
+        effective_voltage_kp = inverter_config.voltage_kp;
+        effective_voltage_ki = inverter_config.voltage_ki;
+    }
+    DqControl_SetVoltageGains(&dq_control,
+                              effective_voltage_kp,
+                              effective_voltage_ki);
+    inverter_status.frequency_compensation_target_v = 0.0f;
+    inverter_status.frequency_compensation_applied_v = 0.0f;
+    inverter_status.effective_voltage_kp = effective_voltage_kp;
+    inverter_status.effective_voltage_ki = effective_voltage_ki;
 }
 
 static void Inverter_UpdateVoltageCompensation(void)
@@ -237,16 +292,49 @@ static void Inverter_UpdateVoltageCompensation(void)
     voltage_compensation_applied_v = 0.0f;
 #endif
 
-    effective_vll_ref_rms =
-        Inverter_Clamp(inverter_config.vll_ref_rms
-                       + voltage_compensation_applied_v,
-                       0.0f,
-                       VCOMP_EFFECTIVE_REF_MAX_V);
     inverter_status.voltage_compensation_target_v =
         voltage_compensation_target_v;
     inverter_status.voltage_compensation_applied_v =
         voltage_compensation_applied_v;
-    inverter_status.effective_vll_ref_rms = effective_vll_ref_rms;
+}
+
+static void Inverter_UpdateFrequencyCompensation(void)
+{
+    float ratio = Inverter_GetFrequencyInterpolationRatio();
+
+    if (inverter_config.frequency_compensation_enabled != 0U)
+    {
+        frequency_compensation_target_v =
+            inverter_config.frequency_compensation_30_v
+            + ratio * (inverter_config.frequency_compensation_60_v
+                       - inverter_config.frequency_compensation_30_v);
+        effective_voltage_kp = inverter_config.voltage_kp_30_hz
+            + ratio * (inverter_config.voltage_kp
+                       - inverter_config.voltage_kp_30_hz);
+        effective_voltage_ki = inverter_config.voltage_ki_30_hz
+            + ratio * (inverter_config.voltage_ki
+                       - inverter_config.voltage_ki_30_hz);
+    }
+    else
+    {
+        frequency_compensation_target_v = 0.0f;
+        effective_voltage_kp = inverter_config.voltage_kp;
+        effective_voltage_ki = inverter_config.voltage_ki;
+    }
+
+    frequency_compensation_applied_v +=
+        VCOMP_FILTER_GAIN
+        * (frequency_compensation_target_v
+           - frequency_compensation_applied_v);
+    DqControl_SetVoltageGains(&dq_control,
+                              effective_voltage_kp,
+                              effective_voltage_ki);
+    inverter_status.frequency_compensation_target_v =
+        frequency_compensation_target_v;
+    inverter_status.frequency_compensation_applied_v =
+        frequency_compensation_applied_v;
+    inverter_status.effective_voltage_kp = effective_voltage_kp;
+    inverter_status.effective_voltage_ki = effective_voltage_ki;
 }
 
 static void Inverter_ResetControlState(void)
@@ -254,6 +342,8 @@ static void Inverter_ResetControlState(void)
     DqControl_Reset(&dq_control);
     Inverter_ResetCycleDiagnostics();
     Inverter_ResetVoltageCompensation();
+    Inverter_ResetFrequencyCompensation();
+    Inverter_UpdateEffectiveVoltageReference();
     inverter_status.vd_ref = 0.0f;
     inverter_status.vd = 0.0f;
     inverter_status.vq = 0.0f;
@@ -272,15 +362,22 @@ void Inverter_Init(void)
     inverter_config.vll_ref_rms = 32.00f;
     inverter_config.voltage_kp = 0.025f;
     inverter_config.voltage_ki = 0.006f;
+    inverter_config.voltage_kp_30_hz = 0.025f;
+    inverter_config.voltage_ki_30_hz = 0.006f;
     inverter_config.voltage_compensation_offset_v = VCOMP_DEFAULT_OFFSET_V;
     inverter_config.voltage_compensation_slope_v_per_a =
         VCOMP_DEFAULT_SLOPE_V_PER_A;
+    inverter_config.frequency_compensation_30_v = FCOMP_DEFAULT_30_V;
+    inverter_config.frequency_compensation_60_v = FCOMP_DEFAULT_60_V;
     inverter_config.voltage_compensation_enabled = VCOMP_DEFAULT_ENABLED;
+    inverter_config.frequency_compensation_enabled = FCOMP_DEFAULT_ENABLED;
 
-    DqControl_Init(&dq_control, &inverter_config);
-    Inverter_ResetVoltageCompensation();
     target_frequency_hz = DEFAULT_FREQUENCY_HZ;
     actual_frequency_hz = DEFAULT_FREQUENCY_HZ;
+    DqControl_Init(&dq_control, &inverter_config);
+    Inverter_ResetVoltageCompensation();
+    Inverter_ResetFrequencyCompensation();
+    Inverter_UpdateEffectiveVoltageReference();
     inverter_status.mode = DQ_CONTROL_MODE;
     inverter_status.run_state = INVERTER_RUN_STATE_STOP;
     inverter_status.target_frequency_hz = target_frequency_hz;
@@ -311,6 +408,7 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
                 return false;
             }
             new_config.voltage_kp = value;
+            new_config.voltage_kp_30_hz = value;
             break;
 
         case INVERTER_PARAMETER_VOLTAGE_KI:
@@ -319,6 +417,7 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
                 return false;
             }
             new_config.voltage_ki = value;
+            new_config.voltage_ki_30_hz = value;
             break;
 
         case INVERTER_PARAMETER_VCOMP_ENABLE:
@@ -347,6 +446,64 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
             new_config.voltage_compensation_slope_v_per_a = value;
             break;
 
+        case INVERTER_PARAMETER_FCOMP_ENABLE:
+            if (!((value == 0.0f) || (value == 1.0f)))
+            {
+                return false;
+            }
+            new_config.frequency_compensation_enabled = (uint8_t)value;
+            break;
+
+        case INVERTER_PARAMETER_FCOMP_30_V:
+            if (!((value >= -FCOMP_LIMIT_V) &&
+                  (value <= FCOMP_LIMIT_V)))
+            {
+                return false;
+            }
+            new_config.frequency_compensation_30_v = value;
+            break;
+
+        case INVERTER_PARAMETER_FCOMP_60_V:
+            if (!((value >= -FCOMP_LIMIT_V) &&
+                  (value <= FCOMP_LIMIT_V)))
+            {
+                return false;
+            }
+            new_config.frequency_compensation_60_v = value;
+            break;
+
+        case INVERTER_PARAMETER_VOLTAGE_KP_30_HZ:
+            if (!((value >= 0.0f) && (value <= DQ_VOLTAGE_KP_MAX)))
+            {
+                return false;
+            }
+            new_config.voltage_kp_30_hz = value;
+            break;
+
+        case INVERTER_PARAMETER_VOLTAGE_KI_30_HZ:
+            if (!((value >= 0.0f) && (value <= DQ_VOLTAGE_KI_MAX)))
+            {
+                return false;
+            }
+            new_config.voltage_ki_30_hz = value;
+            break;
+
+        case INVERTER_PARAMETER_VOLTAGE_KP_60_HZ:
+            if (!((value >= 0.0f) && (value <= DQ_VOLTAGE_KP_MAX)))
+            {
+                return false;
+            }
+            new_config.voltage_kp = value;
+            break;
+
+        case INVERTER_PARAMETER_VOLTAGE_KI_60_HZ:
+            if (!((value >= 0.0f) && (value <= DQ_VOLTAGE_KI_MAX)))
+            {
+                return false;
+            }
+            new_config.voltage_ki = value;
+            break;
+
         case INVERTER_PARAMETER_FREQUENCY_HZ:
             if (!Inverter_IsSupportedFrequency(value))
             {
@@ -370,6 +527,8 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
         }
         inverter_status.target_frequency_hz = target_frequency_hz;
         inverter_status.actual_frequency_hz = actual_frequency_hz;
+        Inverter_UpdateFrequencyCompensation();
+        Inverter_UpdateEffectiveVoltageReference();
         Inverter_UpdateRunState();
     }
     else
@@ -381,6 +540,8 @@ bool Inverter_SetParameter(InverterParameter parameter, float value)
         {
             Inverter_ResetVoltageCompensation();
         }
+        Inverter_UpdateFrequencyCompensation();
+        Inverter_UpdateEffectiveVoltageReference();
     }
     if (primask == 0U)
     {
@@ -611,6 +772,8 @@ static void Inverter_RunVoltageControl(void)
     sin_theta = sinf(theta);
     cos_theta = cosf(theta);
     Inverter_UpdateVoltageCompensation();
+    Inverter_UpdateFrequencyCompensation();
+    Inverter_UpdateEffectiveVoltageReference();
 
     control_input.vd_ref = effective_vll_ref_rms
                            * DQ_SQRT_TWO_THIRDS

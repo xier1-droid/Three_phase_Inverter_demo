@@ -14,6 +14,13 @@ typedef enum
     INVERTER_PARAMETER_VCOMP_ENABLE,
     INVERTER_PARAMETER_VCOMP_OFFSET,
     INVERTER_PARAMETER_VCOMP_SLOPE,
+    INVERTER_PARAMETER_FCOMP_ENABLE,
+    INVERTER_PARAMETER_FCOMP_30_V,
+    INVERTER_PARAMETER_FCOMP_60_V,
+    INVERTER_PARAMETER_VOLTAGE_KP_30_HZ,
+    INVERTER_PARAMETER_VOLTAGE_KI_30_HZ,
+    INVERTER_PARAMETER_VOLTAGE_KP_60_HZ,
+    INVERTER_PARAMETER_VOLTAGE_KI_60_HZ,
     INVERTER_PARAMETER_FREQUENCY_HZ
 } InverterParameter;
 
@@ -49,7 +56,11 @@ typedef struct
     float load_current_rms;
     float voltage_compensation_target_v;
     float voltage_compensation_applied_v;
+    float frequency_compensation_target_v;
+    float frequency_compensation_applied_v;
     float effective_vll_ref_rms;
+    float effective_voltage_kp;
+    float effective_voltage_ki;
     float voltage_d_integral;
     float voltage_q_integral;
     float ud;

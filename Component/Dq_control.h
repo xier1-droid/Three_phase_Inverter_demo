@@ -26,9 +26,14 @@ typedef struct
     float vll_ref_rms;
     float voltage_kp;
     float voltage_ki;
+    float voltage_kp_30_hz;
+    float voltage_ki_30_hz;
     float voltage_compensation_offset_v;
     float voltage_compensation_slope_v_per_a;
+    float frequency_compensation_30_v;
+    float frequency_compensation_60_v;
     uint8_t voltage_compensation_enabled;
+    uint8_t frequency_compensation_enabled;
 } InverterConfig;
 
 typedef struct
@@ -69,6 +74,7 @@ void DqControl_Init(DqControl *control,
 void DqControl_Reset(DqControl *control);
 void DqControl_SetConfig(DqControl *control,
                          const InverterConfig *config);
+void DqControl_SetVoltageGains(DqControl *control, float kp, float ki);
 void DqControl_Step(DqControl *control,
                     const DqControlInput *input,
                     DqControlOutput *output);
