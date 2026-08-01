@@ -71,28 +71,6 @@ static void AdjustVoltageReference(int32_t step_centivolts)
 	                            (float)reference_centivolts / 100.0f);
 }
 
-static void ToggleVoltageCompensation(void)
-{
-	InverterStatus status;
-	float enabled;
-
-	Inverter_GetStatus(&status);
-	enabled = (status.config.voltage_compensation_enabled != 0U)
-	          ? 0.0f : 1.0f;
-	(void)Inverter_SetParameter(INVERTER_PARAMETER_VCOMP_ENABLE, enabled);
-}
-
-static void ToggleFrequencyCompensation(void)
-{
-	InverterStatus status;
-	float enabled;
-
-	Inverter_GetStatus(&status);
-	enabled = (status.config.frequency_compensation_enabled != 0U)
-	          ? 0.0f : 1.0f;
-	(void)Inverter_SetParameter(INVERTER_PARAMETER_FCOMP_ENABLE, enabled);
-}
-
 void Key_task(void)
 {
 	Key_State key;
@@ -126,14 +104,6 @@ void Key_task(void)
 
 		case KEY5_PRESS:
 			AdjustVoltageReference(1);
-			break;
-
-		case KEY6_PRESS:
-			ToggleVoltageCompensation();
-			break;
-
-		case KEY6_LONG_PRESS:
-			ToggleFrequencyCompensation();
 			break;
 
 		default:

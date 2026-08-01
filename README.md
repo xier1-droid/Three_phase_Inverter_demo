@@ -2,7 +2,7 @@
 
 基于 STM32F407VETx 的三相离网逆变器控制工程，使用 Keil MDK-ARM、STM32 HAL 和 TIM8 高级定时器实现三相互补 SVPWM。本分支保留 DQ 开环和 DQ 单电压环，不再包含 DQ 电压电流级联双闭环。
 
-> 当前默认模式为 DQ 单电压环。控制器使用输出电压前馈叠加 d/q 电压 PI 修正，并根据实时母线电压限制最终电压矢量。
+> 当前默认模式为 DQ 开环。控制器直接使用电压参考生成 d/q 电压指令，并根据实时母线电压限制最终电压矢量。
 
 ## 当前功能
 
@@ -27,14 +27,14 @@
 #define DQ_VOLTAGE_LOOP              1U
 
 #ifndef DQ_CONTROL_MODE
-#define DQ_CONTROL_MODE              DQ_VOLTAGE_LOOP
+#define DQ_CONTROL_MODE              DQ_OPEN_LOOP
 #endif
 ```
 
 | 模式 | 行为 |
 | --- | --- |
-| `DQ_OPEN_LOOP` | `ud=vd_ref`、`uq=0`，保留软启停、SVPWM和保护 |
-| `DQ_VOLTAGE_LOOP` | 参考电压前馈加 d/q 电压 PI，当前默认模式 |
+| `DQ_OPEN_LOOP` | `ud=vd_ref`、`uq=0`，保留软启停、SVPWM和保护，当前默认模式 |
+| `DQ_VOLTAGE_LOOP` | 参考电压前馈加 d/q 电压 PI |
 
 模式只能在编译时切换，不支持 UART 运行时切换。
 

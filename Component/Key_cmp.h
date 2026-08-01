@@ -10,8 +10,7 @@ typedef enum {
     KEY3_PRESS,
     KEY4_PRESS,
     KEY5_PRESS,
-    KEY6_PRESS,
-    KEY6_LONG_PRESS
+    KEY6_PRESS
 } Key_State; 
 
 void KEY_Init(void);

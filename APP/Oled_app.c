@@ -1,6 +1,7 @@
 #include "Oled_app.h"
 
 #define OLED_LINE_LENGTH 16U
+#define OLED_SQRT_THREE  1.732050808f
 
 static const char *OLED_GetStateText(InverterRunState state)
 {
@@ -31,6 +32,18 @@ static void OLED_PadLine(char *line)
     line[OLED_LINE_LENGTH] = '\0';
 }
 
+static float OLED_GetModulationIndex(const InverterStatus *status)
+{
+    if (status->vdc <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    return OLED_SQRT_THREE
+           * sqrtf(status->ud * status->ud + status->uq * status->uq)
+           / status->vdc;
+}
+
 void OLED_DisplayStatus(void)
 {
     static char previous_lines[4][OLED_LINE_LENGTH + 1U];
@@ -38,21 +51,20 @@ void OLED_DisplayStatus(void)
     char lines[4][OLED_LINE_LENGTH + 1U];
     float measured_vll_rms;
     float displayed_vll_ref_rms;
+    float modulation_index;
     uint8_t line;
 
     Inverter_GetStatus(&status);
     displayed_vll_ref_rms = status.effective_vll_ref_rms;
+    modulation_index = OLED_GetModulationIndex(&status);
     (void)snprintf(lines[0], sizeof(lines[0]),
                    "OUTPUT: %s", OLED_GetStateText(status.run_state));
     (void)snprintf(lines[1], sizeof(lines[1]),
-                   "FREQ: %4.1fHz", status.actual_frequency_hz);
+                   "F:%4.1f>%4.1fHz",
+                   status.actual_frequency_hz,
+                   status.target_frequency_hz);
     (void)snprintf(lines[2], sizeof(lines[2]),
-                   "TARGET:%2.0fHz F%cL%c",
-                   status.target_frequency_hz,
-                   (status.config.frequency_compensation_enabled != 0U)
-                   ? '+' : '-',
-                   (status.config.voltage_compensation_enabled != 0U)
-                   ? '+' : '-');
+                   "M:%.6f", modulation_index);
     if (status.cycle_diagnostic_valid != 0U)
     {
         measured_vll_rms = sqrtf(
