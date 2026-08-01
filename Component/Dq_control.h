@@ -7,7 +7,7 @@
 #define DQ_VOLTAGE_LOOP              1U
 
 #ifndef DQ_CONTROL_MODE
-#define DQ_CONTROL_MODE              DQ_VOLTAGE_LOOP
+#define DQ_CONTROL_MODE              DQ_OPEN_LOOP
 #endif
 
 #if ((DQ_CONTROL_MODE != DQ_OPEN_LOOP) && \
